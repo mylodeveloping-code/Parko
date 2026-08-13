@@ -1,8 +1,5 @@
 import {
     SlashCommandBuilder,
-    ActionRowBuilder,
-    ButtonBuilder,
-    ButtonStyle,
 } from "discord.js";
 import { InteractionHelper } from "../../utils/interactionHelper.js";
 import { createEmbed } from "../../utils/embeds.js";
@@ -118,7 +115,7 @@ export async function createInitialHelpMenu(client) {
 
     return {
         embeds: [embed],
-        components: [buttonRow, selectRow],
+        components: [selectRow],
     };
 }
 
