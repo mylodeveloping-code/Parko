@@ -7,9 +7,9 @@ import { TitanBotError, ErrorTypes } from '../../utils/errorHandler.js';
 import { addXp } from './xpSystem.js';
 import { getUserLevelKey } from '../../utils/database/keys.js';
 
-const BASE_XP = 100;
-const XP_MULTIPLIER = 1.5;
-const MAX_LEVEL = 1000;
+const BASE_XP = 0;
+const XP_MULTIPLIER = 0;
+const MAX_LEVEL = 0;
 const MIN_LEVEL = 0;
 
 export function getXpForLevel(level) {
