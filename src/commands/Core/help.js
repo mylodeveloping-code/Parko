@@ -100,15 +100,12 @@ export async function createInitialHelpMenu(client) {
                 inline: false,
             },
             {
-                name: '\u200B',
-                value: `-# ${botName} is [open source](https://youtu.be/1jCZX8s3bJE?si=NPOYx-vxVE1I5vJK)`,
-                inline: false,
             },
         ],
     });
 
     embed.setFooter({ 
-        text: "Made with ❤️" 
+        text: "Made by Park" 
     });
     embed.setTimestamp();
 
@@ -116,11 +113,6 @@ export async function createInitialHelpMenu(client) {
         .setCustomId(BUG_REPORT_BUTTON_ID)
         .setLabel("Report Bug")
         .setStyle(ButtonStyle.Danger);
-
-    const supportButton = new ButtonBuilder()
-        .setLabel("Support Server")
-        .setURL("https://discord.gg/QnWNz2dKCE")
-        .setStyle(ButtonStyle.Link);
 
     const selectRow = createSelectMenu(
         CATEGORY_SELECT_ID,
