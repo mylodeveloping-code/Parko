@@ -1,29 +1,23 @@
 import { Events } from 'discord.js';
 import { logger } from '../utils/logger.js';
-
 import {
     getLevelingConfig,
     getUserLevelData,
 } from '../services/leveling/leveling.js';
-
 import { addXp } from '../services/leveling/xpSystem.js';
 import { checkRateLimit } from '../utils/rateLimiter.js';
 import { parsePrefixCommand } from '../utils/prefixParser.js';
-
 import {
     supportsPrefixExecution,
     executePrefixCommand,
     resolvePrefixAccessKey,
 } from '../utils/messageAdapter.js';
-
 import {
     resolveCommandAlias,
     resolveSubcommandAlias,
 } from '../config/commands/commandAliases.js';
-
 import { getPrefixRestriction } from '../config/commands/prefixRestrictions.js';
 import { getGuildConfig } from '../services/config/guildConfig.js';
-
 import {
     getCommandPrefix,
     getBotMessage,
@@ -31,12 +25,10 @@ import {
     isCommandCategoryEnabled,
     isMaintenanceMode,
 } from '../config/bot.js';
-
 import {
     enforceAbuseProtection,
     formatCooldownDuration,
 } from '../utils/abuseProtection.js';
-
 import { createEmbed } from '../utils/embeds.js';
 import { isCommandEnabled } from '../services/commandAccessService.js';
 
@@ -62,23 +54,20 @@ const MESSAGE_XP_RATE_LIMIT_WINDOW_MS = 10000;
 // ANTI-SPAM CONFIGURATION
 // ============================================================
 
+// 5 messages within 3 seconds = spam
 const SPAM_MESSAGE_COUNT = 5;
 const SPAM_WINDOW_MS = 3000;
 
 const FIRST_TIMEOUT_MS = 15 * 60 * 1000;
 const SECOND_TIMEOUT_MS = 60 * 60 * 1000;
 
-const THIRTY_DAY_BAN_MS =
-    30 * 24 * 60 * 60 * 1000;
+const THIRTY_DAY_BAN_MS = 30 * 24 * 60 * 60 * 1000;
 
-const PB_EXEMPT_ROLE_ID =
-    '1537848681728835635';
+// PB Exempt role.
+const PB_EXEMPT_ROLE_ID = '1537848681728835635';
 
 // guildId -> userId -> recent messages
 const spamTracker = new Map();
-
-// guildId:userId -> pending processing timer
-const spamPending = new Map();
 
 // guildId:userId -> escalation level
 //
@@ -100,29 +89,15 @@ const spamProcessing = new Set();
 // RESET ANTI-SPAM HISTORY
 // ============================================================
 
-export function resetSpamHistory(
-    guildId,
-    userId
-) {
-    const key =
-        `${guildId}:${userId}`;
+export function resetSpamHistory(guildId, userId) {
+    const key = `${guildId}:${userId}`;
 
     spamTracker
         .get(guildId)
         ?.delete(userId);
 
     spamEscalation.delete(key);
-
     spamTimeoutState.delete(key);
-
-    const pendingTimer =
-        spamPending.get(key);
-
-    if (pendingTimer) {
-        clearTimeout(pendingTimer);
-        spamPending.delete(key);
-    }
-
     spamProcessing.delete(key);
 
     logger.info(
@@ -141,10 +116,8 @@ export default {
 
     async execute(message, client) {
         try {
-            if (
-                message.author.bot ||
-                !message.guild
-            ) {
+            // Ignore bots and DMs.
+            if (message.author.bot || !message.guild) {
                 return;
             }
 
@@ -152,30 +125,19 @@ export default {
                 `Message received from ${message.author.tag}: ${message.content}`
             );
 
-            await handleAntiSpam(
-                message,
-                client
-            );
+            // Anti-spam runs before other message processing.
+            await handleAntiSpam(message, client);
 
             const countingProcessed =
-                await handleCountingGame(
-                    message,
-                    client
-                );
+                await handleCountingGame(message, client);
 
             if (countingProcessed) {
                 return;
             }
 
-            await handlePrefixCommand(
-                message,
-                client
-            );
+            await handlePrefixCommand(message, client);
 
-            await handleLeveling(
-                message,
-                client
-            );
+            await handleLeveling(message, client);
         } catch (error) {
             logger.error(
                 'Error in messageCreate event:',
@@ -189,20 +151,12 @@ export default {
 // ANTI-SPAM
 // ============================================================
 
-async function handleAntiSpam(
-    message,
-    client
-) {
+async function handleAntiSpam(message, client) {
     try {
-        const guildId =
-            message.guild.id;
+        const guildId = message.guild.id;
+        const userId = message.author.id;
 
-        const userId =
-            message.author.id;
-
-        if (
-            isModerationExempt(userId)
-        ) {
+        if (isModerationExempt(userId)) {
             return;
         }
 
@@ -216,41 +170,42 @@ async function handleAntiSpam(
             return;
         }
 
-        const now =
-            Date.now();
-
+        /*
+         * Don't process another spam offense while the user
+         * is already timed out.
+         */
         if (
-            !spamTracker.has(guildId)
+            member.communicationDisabledUntilTimestamp &&
+            member.communicationDisabledUntilTimestamp > Date.now()
         ) {
-            spamTracker.set(
-                guildId,
-                new Map()
-            );
+            return;
         }
 
-        const guildTracker =
-            spamTracker.get(guildId);
+        const now = Date.now();
 
-        if (
-            !guildTracker.has(userId)
-        ) {
-            guildTracker.set(
-                userId,
-                []
-            );
+        if (!spamTracker.has(guildId)) {
+            spamTracker.set(guildId, new Map());
         }
 
-        const messages =
-            guildTracker.get(userId);
+        const guildTracker = spamTracker.get(guildId);
 
-        const recentMessages =
-            messages.filter(
-                entry =>
-                    now -
-                        entry.timestamp <=
-                    SPAM_WINDOW_MS
-            );
+        if (!guildTracker.has(userId)) {
+            guildTracker.set(userId, []);
+        }
 
+        const messages = guildTracker.get(userId);
+
+        /*
+         * Keep only messages from the last 3 seconds.
+         */
+        const recentMessages = messages.filter(
+            (entry) =>
+                now - entry.timestamp <= SPAM_WINDOW_MS
+        );
+
+        /*
+         * Add this message to the current burst.
+         */
         recentMessages.push({
             timestamp: now,
             message,
@@ -261,6 +216,9 @@ async function handleAntiSpam(
             recentMessages
         );
 
+        /*
+         * Need at least 5 messages within 3 seconds.
+         */
         if (
             recentMessages.length <
             SPAM_MESSAGE_COUNT
@@ -271,341 +229,148 @@ async function handleAntiSpam(
         const processingKey =
             `${guildId}:${userId}`;
 
-        if (
-            spamProcessing.has(
-                processingKey
-            )
-        ) {
+        if (spamProcessing.has(processingKey)) {
             return;
         }
 
-        /*
-         * Wait briefly before processing.
-         *
-         * This is important because Discord can deliver
-         * 10 rapidly-sent messages almost simultaneously.
-         * Waiting allows messages #6-#10 to enter the tracker.
-         */
-        if (
-            spamPending.has(
+        spamProcessing.add(processingKey);
+
+        try {
+            /*
+             * Copy the complete spam burst.
+             */
+            const spamMessages = [
+                ...recentMessages
+            ];
+
+            /*
+             * Clear the tracker immediately so a new burst
+             * cannot become mixed with this one.
+             */
+            guildTracker.set(userId, []);
+
+            // =================================================
+            // FIND DUPLICATE MESSAGES
+            // =================================================
+
+            const seenContents = new Set();
+            const messagesToDelete = [];
+
+            for (const entry of spamMessages) {
+                if (!entry?.message) {
+                    continue;
+                }
+
+                /*
+                 * Normalize whitespace and capitalization so:
+                 *
+                 * "hello"
+                 * "hello "
+                 * "HELLO"
+                 *
+                 * are treated as the same spam message.
+                 */
+                const content =
+                    entry.message.content
+                        ?.trim()
+                        .toLowerCase() || '';
+
+                /*
+                 * Keep the FIRST copy.
+                 */
+                if (!seenContents.has(content)) {
+                    seenContents.add(content);
+                    continue;
+                }
+
+                /*
+                 * Delete every duplicate after the first.
+                 */
+                messagesToDelete.push(
+                    entry.message
+                );
+            }
+
+            // =================================================
+            // DELETE DUPLICATES
+            // =================================================
+
+            if (messagesToDelete.length > 0) {
+                const deletableMessages =
+                    messagesToDelete.filter(
+                        (msg) =>
+                            msg &&
+                            msg.deletable
+                    );
+
+                if (deletableMessages.length > 0) {
+                    try {
+                        /*
+                         * Bulk delete is much more reliable than
+                         * firing many individual DELETE requests.
+                         *
+                         * The second argument means:
+                         * filterOld = true
+                         */
+                        await message.channel.bulkDelete(
+                            deletableMessages,
+                            true
+                        );
+
+                        logger.info(
+                            `Anti-spam: bulk deleted ${deletableMessages.length} duplicate messages from ${message.author.tag}.`
+                        );
+                    } catch (bulkDeleteError) {
+                        logger.warn(
+                            'Bulk spam deletion failed. Falling back to individual deletion.',
+                            bulkDeleteError
+                        );
+
+                        /*
+                         * Fallback for channels where bulk deletion
+                         * isn't available.
+                         */
+                        await Promise.allSettled(
+                            deletableMessages.map(
+                                async (spamMessage) => {
+                                    try {
+                                        if (
+                                            spamMessage.deletable
+                                        ) {
+                                            await spamMessage.delete(
+                                                'Automatic anti-spam duplicate removal'
+                                            );
+                                        }
+                                    } catch {
+                                        // Ignore individual failures.
+                                    }
+                                }
+                            )
+                        );
+                    }
+                }
+            }
+
+            // =================================================
+            // PROCESS PUNISHMENT
+            // =================================================
+
+            await processSpamOffense(
+                message,
+                member,
+                client
+            );
+        } finally {
+            spamProcessing.delete(
                 processingKey
-            )
-        ) {
-            clearTimeout(
-                spamPending.get(
-                    processingKey
-                )
             );
         }
-
-        const timer =
-            setTimeout(
-                async () => {
-                    spamPending.delete(
-                        processingKey
-                    );
-
-                    if (
-                        spamProcessing.has(
-                            processingKey
-                        )
-                    ) {
-                        return;
-                    }
-
-                    spamProcessing.add(
-                        processingKey
-                    );
-
-                    try {
-                        await processSpamBurst(
-                            message,
-                            member,
-                            client
-                        );
-                    } catch (error) {
-                        logger.error(
-                            'Error processing spam burst:',
-                            error
-                        );
-                    } finally {
-                        spamProcessing.delete(
-                            processingKey
-                        );
-                    }
-                },
-                750
-            );
-
-        spamPending.set(
-            processingKey,
-            timer
-        );
-
     } catch (error) {
         logger.error(
             'Error handling anti-spam:',
             error
         );
     }
-}
-
-// ============================================================
-// PROCESS COMPLETE SPAM BURST
-// ============================================================
-
-async function processSpamBurst(
-    message,
-    member,
-    client
-) {
-    const guildId =
-        message.guild.id;
-
-    const userId =
-        message.author.id;
-
-    const guildTracker =
-        spamTracker.get(guildId);
-
-    if (!guildTracker) {
-        return;
-    }
-
-    let spamMessages =
-        guildTracker.get(userId) || [];
-
-    /*
-     * Clear the event tracker.
-     */
-    guildTracker.set(
-        userId,
-        []
-    );
-
-    /*
-     * Fetch recent channel messages as a backup.
-     *
-     * This catches messages that arrived after the initial
-     * messageCreate events were processed.
-     */
-    try {
-        if (
-            typeof message.channel.messages?.fetch ===
-            'function'
-        ) {
-            const fetched =
-                await message.channel.messages
-                    .fetch({
-                        limit: 100,
-                    })
-                    .catch(() => null);
-
-            if (fetched) {
-                const cutoff =
-                    Date.now() -
-                    SPAM_WINDOW_MS;
-
-                const existingIds =
-                    new Set(
-                        spamMessages.map(
-                            entry =>
-                                entry.message.id
-                        )
-                    );
-
-                for (
-                    const fetchedMessage
-                    of fetched.values()
-                ) {
-                    if (
-                        fetchedMessage.author?.id !==
-                        userId
-                    ) {
-                        continue;
-                    }
-
-                    if (
-                        fetchedMessage.createdTimestamp <
-                        cutoff
-                    ) {
-                        continue;
-                    }
-
-                    if (
-                        existingIds.has(
-                            fetchedMessage.id
-                        )
-                    ) {
-                        continue;
-                    }
-
-                    spamMessages.push({
-                        timestamp:
-                            fetchedMessage.createdTimestamp,
-
-                        message:
-                            fetchedMessage,
-                    });
-
-                    existingIds.add(
-                        fetchedMessage.id
-                    );
-                }
-            }
-        }
-    } catch (error) {
-        logger.warn(
-            `Could not fetch recent messages for anti-spam cleanup in ${message.channel.id}.`,
-            error
-        );
-    }
-
-    /*
-     * Oldest first.
-     *
-     * This ensures the first copy is the one that remains.
-     */
-    spamMessages.sort(
-        (a, b) =>
-            a.timestamp -
-            b.timestamp
-    );
-
-    /*
-     * ========================================================
-     * KEEP ONE OF EACH MESSAGE
-     * ========================================================
-     */
-
-    const seenContents =
-        new Set();
-
-    const messagesToDelete =
-        [];
-
-    for (
-        const entry
-        of spamMessages
-    ) {
-        const msg =
-            entry.message;
-
-        if (!msg) {
-            continue;
-        }
-
-        if (
-            msg.author?.id !== userId
-        ) {
-            continue;
-        }
-
-        const content =
-            msg.content
-                ?.trim()
-                .toLowerCase() ||
-            '';
-
-        if (!content) {
-            continue;
-        }
-
-        /*
-         * First copy stays.
-         */
-        if (
-            !seenContents.has(
-                content
-            )
-        ) {
-            seenContents.add(
-                content
-            );
-
-            continue;
-        }
-
-        /*
-         * Every duplicate after the first
-         * gets deleted.
-         */
-        messagesToDelete.push(
-            msg
-        );
-    }
-
-    /*
-     * ========================================================
-     * DELETE DUPLICATES
-     * ========================================================
-     */
-
-    if (
-        messagesToDelete.length > 0
-    ) {
-        try {
-            if (
-                typeof message.channel.bulkDelete ===
-                'function'
-            ) {
-                await message.channel
-                    .bulkDelete(
-                        messagesToDelete,
-                        true
-                    )
-                    .catch(
-                        async () => {
-                            await Promise.all(
-                                messagesToDelete.map(
-                                    msg =>
-                                        msg.delete()
-                                            .catch(
-                                                () => {}
-                                            )
-                                )
-                            );
-                        }
-                    );
-            } else {
-                await Promise.all(
-                    messagesToDelete.map(
-                        msg =>
-                            msg.delete()
-                                .catch(
-                                    () => {}
-                                )
-                    )
-                );
-            }
-
-            logger.info(
-                `Anti-spam: deleted ${messagesToDelete.length} duplicate messages from ${message.author.tag}. Kept ${seenContents.size} unique message(s).`
-            );
-        } catch (error) {
-            logger.error(
-                'Failed to delete duplicate spam messages:',
-                error
-            );
-        }
-    }
-
-    /*
-     * Only punish if the complete burst contained
-     * at least 5 messages.
-     */
-    if (
-        spamMessages.length <
-        SPAM_MESSAGE_COUNT
-    ) {
-        return;
-    }
-
-    await processSpamOffense(
-        message,
-        member,
-        client
-    );
 }
 
 // ============================================================
@@ -617,23 +382,17 @@ async function processSpamOffense(
     member,
     client
 ) {
-    const guildId =
-        message.guild.id;
-
-    const userId =
-        message.author.id;
+    const guildId = message.guild.id;
+    const userId = message.author.id;
 
     const escalationKey =
         `${guildId}:${userId}`;
 
-    if (
-        isModerationExempt(userId)
-    ) {
+    if (isModerationExempt(userId)) {
         return;
     }
 
-    const now =
-        Date.now();
+    const now = Date.now();
 
     const previousTimeout =
         spamTimeoutState.get(
@@ -645,18 +404,19 @@ async function processSpamOffense(
             escalationKey
         ) || 0;
 
-    let manuallyUnmutedPBExempt =
-        false;
+    let manuallyUnmutedPBExempt = false;
 
+    /*
+     * Detect an automatic timeout that was manually removed
+     * before it naturally expired.
+     */
     if (previousTimeout) {
         const timeoutShouldStillBeActive =
-            now <
-            previousTimeout.expiresAt;
+            now < previousTimeout.expiresAt;
 
         const currentlyTimedOut =
             member.communicationDisabledUntilTimestamp &&
-            member.communicationDisabledUntilTimestamp >
-                now;
+            member.communicationDisabledUntilTimestamp > now;
 
         const manuallyUnmuted =
             timeoutShouldStillBeActive &&
@@ -666,8 +426,7 @@ async function processSpamOffense(
             manuallyUnmuted &&
             previousTimeout.pbExemptAtTimeout
         ) {
-            manuallyUnmutedPBExempt =
-                true;
+            manuallyUnmutedPBExempt = true;
 
             logger.info(
                 `Anti-spam: ${message.author.tag} had a PB Exempt automatic timeout manually removed early. Repeating offense level ${offenseLevel}.`
@@ -675,8 +434,7 @@ async function processSpamOffense(
         }
 
         if (
-            now >=
-            previousTimeout.expiresAt
+            now >= previousTimeout.expiresAt
         ) {
             spamTimeoutState.delete(
                 escalationKey
@@ -685,14 +443,12 @@ async function processSpamOffense(
     }
 
     /*
-     * Normal users advance.
+     * Normal users advance one offense.
      *
-     * PB Exempt users whose automatic timeout was manually
-     * removed early repeat the same punishment.
+     * PB Exempt users whose timeout was manually removed
+     * early repeat their previous offense level.
      */
-    if (
-        !manuallyUnmutedPBExempt
-    ) {
+    if (!manuallyUnmutedPBExempt) {
         offenseLevel += 1;
 
         spamEscalation.set(
@@ -724,9 +480,7 @@ async function processSpamOffense(
     // OFFENSE 1 — 15 MINUTE TIMEOUT
     // ========================================================
 
-    if (
-        offenseLevel === 1
-    ) {
+    if (offenseLevel === 1) {
         const reason =
             'Automatic anti-spam: 5 messages sent within 3 seconds.';
 
@@ -744,16 +498,11 @@ async function processSpamOffense(
         try {
             const result =
                 await ModerationService.timeoutUser({
-                    guild:
-                        message.guild,
-
+                    guild: message.guild,
                     member,
-
                     moderator,
-
                     durationMs:
                         FIRST_TIMEOUT_MS,
-
                     reason,
                 });
 
@@ -778,15 +527,12 @@ async function processSpamOffense(
 
             await logModerationAction({
                 client,
-                guild:
-                    message.guild,
-
+                guild: message.guild,
                 event: {
                     action:
                         'Member Timed Out',
 
                     target,
-
                     executor,
 
                     reason,
@@ -800,8 +546,7 @@ async function processSpamOffense(
                         moderatorId:
                             client.user.id,
 
-                        automatic:
-                            true,
+                        automatic: true,
 
                         spamOffense:
                             offenseLevel,
@@ -832,9 +577,7 @@ async function processSpamOffense(
     // OFFENSE 2 — 1 HOUR TIMEOUT
     // ========================================================
 
-    if (
-        offenseLevel === 2
-    ) {
+    if (offenseLevel === 2) {
         const reason =
             'Automatic anti-spam: repeated spam after a previous timeout.';
 
@@ -852,16 +595,11 @@ async function processSpamOffense(
         try {
             const result =
                 await ModerationService.timeoutUser({
-                    guild:
-                        message.guild,
-
+                    guild: message.guild,
                     member,
-
                     moderator,
-
                     durationMs:
                         SECOND_TIMEOUT_MS,
-
                     reason,
                 });
 
@@ -882,15 +620,12 @@ async function processSpamOffense(
 
             await logModerationAction({
                 client,
-                guild:
-                    message.guild,
-
+                guild: message.guild,
                 event: {
                     action:
                         'Member Timed Out',
 
                     target,
-
                     executor,
 
                     reason,
@@ -904,8 +639,7 @@ async function processSpamOffense(
                         moderatorId:
                             client.user.id,
 
-                        automatic:
-                            true,
+                        automatic: true,
 
                         spamOffense:
                             offenseLevel,
@@ -936,9 +670,7 @@ async function processSpamOffense(
     // OFFENSE 3 — WARNING #1
     // ========================================================
 
-    if (
-        offenseLevel === 3
-    ) {
+    if (offenseLevel === 3) {
         await issueSpamWarning({
             message,
             client,
@@ -954,9 +686,7 @@ async function processSpamOffense(
     // OFFENSE 4 — WARNING #2
     // ========================================================
 
-    if (
-        offenseLevel === 4
-    ) {
+    if (offenseLevel === 4) {
         await issueSpamWarning({
             message,
             client,
@@ -972,9 +702,7 @@ async function processSpamOffense(
     // OFFENSE 5 — WARNING #3 + 30 DAY BAN
     // ========================================================
 
-    if (
-        offenseLevel >= 5
-    ) {
+    if (offenseLevel >= 5) {
         const reason =
             'Automatic anti-spam: third warning reached after repeated spam.';
 
@@ -986,9 +714,7 @@ async function processSpamOffense(
                 reason,
             });
 
-        if (
-            isModerationExempt(userId)
-        ) {
+        if (isModerationExempt(userId)) {
             return;
         }
 
@@ -1006,29 +732,21 @@ async function processSpamOffense(
         try {
             const result =
                 await ModerationService.banUser({
-                    guild:
-                        message.guild,
-
-                    user:
-                        message.author,
-
+                    guild: message.guild,
+                    user: message.author,
                     moderator,
-
                     reason:
                         'Automatic anti-spam: third warning reached. 30 day ban.',
                 });
 
             await logModerationAction({
                 client,
-                guild:
-                    message.guild,
-
+                guild: message.guild,
                 event: {
                     action:
                         'Member Banned',
 
                     target,
-
                     executor,
 
                     reason:
@@ -1043,8 +761,7 @@ async function processSpamOffense(
                         moderatorId:
                             client.user.id,
 
-                        automatic:
-                            true,
+                        automatic: true,
 
                         spamOffense:
                             offenseLevel,
@@ -1095,48 +812,42 @@ async function sendSpamDM(
         let title;
         let description;
 
-        if (
-            action === 'timeout'
-        ) {
+        if (action === 'timeout') {
             let nextAction = '';
 
-            if (
-                pbExemptSpecial
-            ) {
+            if (pbExemptSpecial) {
                 nextAction =
                     'Manual removal of this timeout before it expires will not escalate on your next spam offense, as you have the "PB Exempt" role.';
-            } else if (
-                manuallyUnmutedPBExempt &&
-                offense === 1
-            ) {
+            } else {
                 /*
-                 * PB Exempt timeout was manually removed.
+                 * First offense:
+                 * 15 minute timeout -> next offense = 1 hour.
+                 */
+                if (offense === 1) {
+                    /*
+                     * If PB Exempt was manually unmuted, the next
+                     * offense repeats the 15 minute timeout.
+                     */
+                    if (manuallyUnmutedPBExempt) {
+                        nextAction =
+                            'Further spam will result in another 15-minute timeout.';
+                    } else {
+                        nextAction =
+                            'Further spam will normally result in a 1-hour timeout.';
+                    }
+                }
+
+                /*
+                 * Second offense:
+                 * 1 hour timeout -> next offense = Warning #1.
                  *
-                 * The repeated offense is still another
-                 * 15-minute timeout.
+                 * IMPORTANT:
+                 * There is NO "another 15-minute timeout" here.
                  */
-                nextAction =
-                    'Further spam will result in another 15-minute timeout.';
-            } else if (
-                offense === 1
-            ) {
-                /*
-                 * FIRST offense:
-                 * current punishment = 15 minutes
-                 * next punishment = 1 hour
-                 */
-                nextAction =
-                    'Further spam will normally result in a 1-hour timeout.';
-            } else if (
-                offense === 2
-            ) {
-                /*
-                 * SECOND offense:
-                 * current punishment = 1 hour
-                 * next punishment = warning
-                 */
-                nextAction =
-                    'Further spam will result in a warning.';
+                else if (offense === 2) {
+                    nextAction =
+                        'Further spam will result in Warning #1.';
+                }
             }
 
             title =
@@ -1151,9 +862,7 @@ async function sendSpamDM(
                 description +=
                     `\n\n${nextAction}`;
             }
-        } else if (
-            action === 'ban'
-        ) {
+        } else if (action === 'ban') {
             title =
                 '🔨 You Have Been Banned';
 
@@ -1208,15 +917,10 @@ async function issueSpamWarning({
     warningNumber,
     reason,
 }) {
-    const guildId =
-        message.guild.id;
+    const guildId = message.guild.id;
+    const userId = message.author.id;
 
-    const userId =
-        message.author.id;
-
-    if (
-        isModerationExempt(userId)
-    ) {
+    if (isModerationExempt(userId)) {
         return null;
     }
 
@@ -1224,28 +928,20 @@ async function issueSpamWarning({
         const {
             id,
             totalCount,
-        } =
-            await WarningService.addWarning({
-                guildId,
-
-                userId,
-
-                moderatorId:
-                    client.user.id,
-
-                reason,
-
-                timestamp:
-                    Date.now(),
-            });
+        } = await WarningService.addWarning({
+            guildId,
+            userId,
+            moderatorId:
+                client.user.id,
+            reason,
+            timestamp:
+                Date.now(),
+        });
 
         const caseId =
             await logModerationAction({
                 client,
-
-                guild:
-                    message.guild,
-
+                guild: message.guild,
                 event: {
                     action:
                         'User Warned',
@@ -1283,14 +979,10 @@ async function issueSpamWarning({
 
         let nextAction;
 
-        if (
-            warningNumber === 1
-        ) {
+        if (warningNumber === 1) {
             nextAction =
                 'Further spam will result in Warning #2.';
-        } else if (
-            warningNumber === 2
-        ) {
+        } else if (warningNumber === 2) {
             nextAction =
                 'Further spam will result in Warning #3 and a 30-day ban.';
         } else {
@@ -1362,44 +1054,60 @@ function scheduleAutomaticUnban(
             MAX_TIMEOUT
         );
 
-    setTimeout(
-        async () => {
-            if (
-                remainingMs >
-                MAX_TIMEOUT
-            ) {
-                scheduleAutomaticUnban(
-                    guildId,
-                    userId,
-                    remainingMs -
-                        MAX_TIMEOUT,
-                    client
+    setTimeout(async () => {
+        if (
+            remainingMs >
+            MAX_TIMEOUT
+        ) {
+            scheduleAutomaticUnban(
+                guildId,
+                userId,
+                remainingMs -
+                    MAX_TIMEOUT,
+                client
+            );
+
+            return;
+        }
+
+        try {
+            const guild =
+                client.guilds.cache.get(
+                    guildId
+                );
+
+            if (!guild) {
+                logger.warn(
+                    `Could not automatically unban ${userId}: guild ${guildId} not found.`
                 );
 
                 return;
             }
 
-            try {
-                const guild =
-                    client.guilds.cache.get(
-                        guildId
-                    );
+            await guild.members.unban(
+                userId,
+                'Automatic anti-spam: 30 day ban expired.'
+            );
 
-                if (!guild) {
-                    logger.warn(
-                        `Could not automatically unban ${userId}: guild ${guildId} not found.`
-                    );
+            logger.info(
+                `Anti-spam: automatically unbanned ${userId} after 30 days.`
+            );
 
-                    return;
-                }
+            spamEscalation.delete(
+                `${guildId}:${userId}`
+            );
 
-                await guild.members.unban(
-                    userId,
-                    'Automatic anti-spam: 30 day ban expired.'
-                );
+            spamTimeoutState.delete(
+                `${guildId}:${userId}`
+            );
 
+            spamTracker
+                .get(guildId)
+                ?.delete(userId);
+        } catch (error) {
+            if (error?.code === 10026) {
                 logger.info(
-                    `Anti-spam: automatically unbanned ${userId} after 30 days.`
+                    `User ${userId} was already unbanned when automatic unban was attempted.`
                 );
 
                 spamEscalation.delete(
@@ -1414,38 +1122,15 @@ function scheduleAutomaticUnban(
                     .get(guildId)
                     ?.delete(userId);
 
-            } catch (error) {
-                if (
-                    error?.code ===
-                    10026
-                ) {
-                    logger.info(
-                        `User ${userId} was already unbanned when automatic unban was attempted.`
-                    );
-
-                    spamEscalation.delete(
-                        `${guildId}:${userId}`
-                    );
-
-                    spamTimeoutState.delete(
-                        `${guildId}:${userId}`
-                    );
-
-                    spamTracker
-                        .get(guildId)
-                        ?.delete(userId);
-
-                    return;
-                }
-
-                logger.error(
-                    `Failed to automatically unban ${userId}:`,
-                    error
-                );
+                return;
             }
-        },
-        timeout
-    );
+
+            logger.error(
+                `Failed to automatically unban ${userId}:`,
+                error
+            );
+        }
+    }, timeout);
 }
 
 // ============================================================
@@ -1500,8 +1185,7 @@ async function handlePrefixCommand(
                 musicPrefixShortcut
             )
         ) {
-            commandName =
-                'music';
+            commandName = 'music';
 
             args = [
                 musicPrefixShortcut,
@@ -1723,7 +1407,6 @@ async function handlePrefixCommand(
             prefix,
             guildConfig
         );
-
     } catch (error) {
         logger.error(
             'Error handling prefix command:',
@@ -1770,9 +1453,7 @@ async function handleCountingGame(
             message.author.id ===
                 config.lastUserId;
 
-        if (
-            invalidAttempt
-        ) {
+        if (invalidAttempt) {
             await message
                 .delete()
                 .catch(() => {});
@@ -1799,14 +1480,11 @@ async function handleCountingGame(
                     `❌ Count broken by <@${message.author.id}>. The sequence has been reset to **1**.`
                 );
 
-            setTimeout(
-                () => {
-                    failureMessage
-                        .delete()
-                        .catch(() => {});
-                },
-                10000
-            );
+            setTimeout(() => {
+                failureMessage
+                    .delete()
+                    .catch(() => {});
+            }, 10000);
 
             return true;
         }
@@ -1818,7 +1496,6 @@ async function handleCountingGame(
         );
 
         return true;
-
     } catch (error) {
         logger.error(
             'Error handling counting game:',
@@ -1858,9 +1535,7 @@ async function handleLeveling(
                 message.guild.id
             );
 
-        if (
-            !levelingConfig?.enabled
-        ) {
+        if (!levelingConfig?.enabled) {
             return;
         }
 
@@ -1912,8 +1587,7 @@ async function handleLeveling(
 
         if (
             !message.content ||
-            message.content
-                .trim()
+            message.content.trim()
                 .length === 0
         ) {
             return;
@@ -1999,14 +1673,11 @@ async function handleLeveling(
                 finalXP
             );
 
-        if (
-            result?.leveledUp
-        ) {
+        if (result?.leveledUp) {
             logger.info(
                 `${message.author.tag} leveled up to level ${result.level} in ${message.guild.name}`
             );
         }
-
     } catch (error) {
         logger.error(
             'Error handling leveling for message:',
