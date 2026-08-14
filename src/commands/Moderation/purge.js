@@ -46,13 +46,21 @@ export default {
     }
 
     try {
-      // Fetch exactly the requested number of actual messages.
-      // The slash command itself is not counted as a message to purge.
+      // Fetch one extra message because the prefix command itself
+      // (.purge 8) is a normal Discord message.
       const fetched = await channel.messages.fetch({
-        limit: amount
+        limit: Math.min(amount + 1, 100)
       });
 
-      const deleted = await channel.bulkDelete(fetched, true);
+      // Remove the command message from the messages that will be deleted.
+      if (interaction.message?.id) {
+        fetched.delete(interaction.message.id);
+      }
+
+      // Only delete the requested amount of actual messages.
+      const messagesToDelete = fetched.first(amount);
+
+      const deleted = await channel.bulkDelete(messagesToDelete, true);
       const deletedCount = deleted.size;
 
       await logEvent({
