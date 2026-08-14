@@ -24,24 +24,96 @@ export default {
 
     category: 'moderation',
 
-    /*
-     * This command can be used as a prefix command.
-     *
-     * Because commandAliases.js already contains:
-     *
-     * 'unmute': 'untimeout'
-     *
-     * the following will resolve to this command:
-     *
-     * .unmute @user
-     *
-     * We intentionally do NOT add "prefixAliases" here because
-     * your command system already handles aliases globally.
-     */
     async execute(interaction, config, client) {
         try {
-            const targetUser =
-                interaction.options.getUser('target');
+            let targetUser = null;
+            let member = null;
+
+            // ====================================================
+            // GET TARGET
+            // ====================================================
+
+            /*
+             * Normal slash-command path.
+             */
+            try {
+                targetUser =
+                    interaction.options.getUser('target');
+            } catch {
+                targetUser = null;
+            }
+
+            /*
+             * Normal slash-command / mock-interaction member path.
+             */
+            try {
+                member =
+                    interaction.options.getMember('target');
+            } catch {
+                member = null;
+            }
+
+            /*
+             * PREFIX COMMAND FALLBACK
+             *
+             * For:
+             * .unmute @user
+             * .untimeout @user
+             *
+             * messageAdapter.js provides _hoistedOptions.
+             */
+            if (
+                interaction._isPrefixCommand &&
+                (!targetUser || !member)
+            ) {
+                const rawTarget =
+                    interaction.options?._hoistedOptions?.[0]?.value;
+
+                if (rawTarget && interaction.guild) {
+                    const mentionMatch =
+                        String(rawTarget).match(
+                            /^<@!?(\d+)>$/
+                        );
+
+                    const userId =
+                        mentionMatch
+                            ? mentionMatch[1]
+                            : String(rawTarget).replace(
+                                /^\D+/,
+                                ''
+                            );
+
+                    if (/^\d+$/.test(userId)) {
+                        member =
+                            await interaction.guild.members
+                                .fetch(userId)
+                                .catch(() => null);
+
+                        if (member) {
+                            targetUser = member.user;
+                        }
+                    }
+                }
+            }
+
+            /*
+             * If we still don't have a member, try fetching
+             * using the target user's ID.
+             */
+            if (
+                !member &&
+                targetUser &&
+                interaction.guild
+            ) {
+                member =
+                    await interaction.guild.members
+                        .fetch(targetUser.id)
+                        .catch(() => null);
+            }
+
+            if (!targetUser && member) {
+                targetUser = member.user;
+            }
 
             if (!targetUser) {
                 throw new TitanBotError(
@@ -49,25 +121,6 @@ export default {
                     ErrorTypes.USER_INPUT,
                     'You must specify a user to untimeout.'
                 );
-            }
-
-            /*
-             * Get the member from the guild.
-             *
-             * For prefix commands, messageAdapter.js creates
-             * a mock interaction, so getMember('target') can
-             * return null if the member is not cached.
-             *
-             * Therefore we fall back to fetching the member.
-             */
-            let member =
-                interaction.options.getMember('target');
-
-            if (!member && interaction.guild) {
-                member =
-                    await interaction.guild.members
-                        .fetch(targetUser.id)
-                        .catch(() => null);
             }
 
             if (!member) {
@@ -78,10 +131,10 @@ export default {
                 );
             }
 
-            /*
-             * Check both Discord's native timeout and the
-             * custom muted role used by your moderation system.
-             */
+            // ====================================================
+            // CHECK TIMEOUT / MUTED ROLE
+            // ====================================================
+
             const timeoutUntil =
                 member.communicationDisabledUntilTimestamp;
 
@@ -113,10 +166,10 @@ export default {
                 return;
             }
 
-            /*
-             * Remove the timeout and restore the user's
-             * previous roles.
-             */
+            // ====================================================
+            // REMOVE TIMEOUT
+            // ====================================================
+
             const result =
                 await ModerationService.removeTimeoutUser({
                     guild: interaction.guild,
@@ -126,21 +179,16 @@ export default {
                         `Timeout removed by ${interaction.user.tag}`,
                 });
 
-            /*
-             * Tell the anti-spam system that this timeout
-             * was manually removed.
-             */
+            // ====================================================
+            // UPDATE ANTI-SPAM STATE
+            // ====================================================
+
             try {
                 markSpamTimeoutManuallyRemoved(
                     interaction.guild.id,
                     targetUser.id
                 );
             } catch (spamError) {
-                /*
-                 * The timeout removal already succeeded, so
-                 * an anti-spam state error should not make
-                 * the command appear to have failed.
-                 */
                 logger.error(
                     `Failed to update anti-spam timeout state for ${targetUser.tag} (${targetUser.id}):`,
                     spamError
@@ -150,6 +198,10 @@ export default {
             logger.info(
                 `User ${targetUser.tag} (${targetUser.id}) was manually untimeouted by ${interaction.user.tag} (${interaction.user.id}).`
             );
+
+            // ====================================================
+            // SUCCESS RESPONSE
+            // ====================================================
 
             await InteractionHelper.universalReply(
                 interaction,
@@ -163,6 +215,7 @@ export default {
             );
 
             return result;
+
         } catch (error) {
             logger.error(
                 'Failed to untimeout user:',
