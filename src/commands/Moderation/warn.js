@@ -110,84 +110,62 @@ export default {
         /*
          * WARNING ROLES
          *
-         * 1 warning  -> Warning 1
-         * 2 warnings -> Warning 2
-         * 3+ warnings -> Warning 3
+         * 1 warning:
+         *   Warning 1
+         *
+         * 2 warnings:
+         *   Warning 1 + Warning 2
+         *
+         * 3 warnings:
+         *   Warning 1 + Warning 2 + Warning 3
+         *
+         * 4+ warnings:
+         *   Warning 1 + Warning 2 + Warning 3
+         *
+         * Warning roles are NEVER removed when another warning is added.
          */
+
         const warningLevel = Math.min(totalCount, 3);
-        const newWarningRoleId = WARNING_ROLES[warningLevel];
 
         try {
-            // Get all warning roles from the guild
-            const warningRoleIds = Object.values(WARNING_ROLES);
+            // Give every warning role the user has earned.
+            for (let level = 1; level <= warningLevel; level++) {
+                const roleId = WARNING_ROLES[level];
 
-            // Remove any old warning roles first
-            for (const roleId of warningRoleIds) {
-                if (member.roles.cache.has(roleId) && roleId !== newWarningRoleId) {
-                    await member.roles.remove(
+                if (!member.roles.cache.has(roleId)) {
+                    await member.roles.add(
                         roleId,
-                        `Updating warning level to Warning ${warningLevel}`
+                        `Warning ${level} role - ${totalCount} total warnings`
                     );
                 }
             }
 
-            // Add the new warning role
-            if (!member.roles.cache.has(newWarningRoleId)) {
-                await member.roles.add(
-                    newWarningRoleId,
-                    `Warning level ${warningLevel} (${totalCount} total warnings)`
-                );
-            }
-
-            logger.info(`Updated warning role for ${target.tag}`, {
+            logger.info(`Updated warning roles for ${target.tag}`, {
                 userId: target.id,
                 guildId,
                 totalWarnings: totalCount,
                 warningLevel,
-                roleId: newWarningRoleId,
             });
         } catch (roleError) {
-            logger.error(`Failed to update warning role for ${target.tag}`, {
+            logger.error(`Failed to update warning roles for ${target.tag}`, {
                 userId: target.id,
                 guildId,
                 totalWarnings: totalCount,
                 warningLevel,
-                roleId: newWarningRoleId,
                 error: roleError,
             });
 
-            // The warning itself was still successfully added.
-            // Tell the moderator that the role could not be updated.
+            // The warning was still successfully recorded.
             await InteractionHelper.safeEditReply(interaction, {
                 embeds: [
                     warningEmbed(
                         `⚠️ **Warned** ${target.tag}`,
                         `**Reason:** ${reason}\n` +
                         `**Total Warns:** ${totalCount}\n\n` +
-                        `⚠️ The warning was recorded, but I could not update the warning role. ` +
-                        `Make sure my bot role is above the Warning 1/2/3 roles and that I have **Manage Roles** permission.`
+                        `⚠️ The warning was recorded, but I could not update the warning roles.\n` +
+                        `Make sure I have **Manage Roles** permission and that my bot role is above all three warning roles.`
                     ),
                 ],
-            });
-
-            await logModerationAction({
-                client,
-                guild: interaction.guild,
-                event: {
-                    action: "User Warned",
-                    target: `${target.tag} (${target.id})`,
-                    executor: `${moderator.tag} (${moderator.id})`,
-                    reason,
-                    metadata: {
-                        userId: target.id,
-                        moderatorId: moderator.id,
-                        totalWarns: totalCount,
-                        warningNumber: totalCount,
-                        warningLevel,
-                        warningId: id,
-                        warningRoleUpdateFailed: true,
-                    },
-                },
             });
 
             return;
@@ -209,7 +187,10 @@ export default {
                     warningNumber: totalCount,
                     warningLevel,
                     warningId: id,
-                    warningRoleId: newWarningRoleId,
+                    warningRoles: Object.values(WARNING_ROLES).slice(
+                        0,
+                        warningLevel
+                    ),
                 },
             },
         });
