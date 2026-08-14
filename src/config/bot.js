@@ -6,7 +6,7 @@ export const botConfig = {
     activities: [
       {
         name: "Custom Status",
-        state: "Use the prefix `.` for commands instead of slash commands.",
+        state: 'Use the prefix "." for commands instead of slash commands.',
         type: 4,
       },
     ],
