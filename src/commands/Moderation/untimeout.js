@@ -6,6 +6,8 @@ import { TitanBotError, ErrorTypes } from '../../utils/errorHandler.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
 import { markSpamTimeoutManuallyRemoved } from '../../events/messageCreate.js';
 
+const MUTED_ROLE_ID = '1537615321438093425';
+
 export default {
     data: new SlashCommandBuilder()
         .setName('untimeout')
@@ -20,14 +22,22 @@ export default {
             PermissionFlagsBits.ModerateMembers
         ),
 
-    // IMPORTANT:
-    // This allows the prefix version to be used.
-    // The prefix command will be:
-    // .unmute @user
-    prefixAliases: ['unmute'],
-
     category: 'moderation',
 
+    /*
+     * This command can be used as a prefix command.
+     *
+     * Because commandAliases.js already contains:
+     *
+     * 'unmute': 'untimeout'
+     *
+     * the following will resolve to this command:
+     *
+     * .unmute @user
+     *
+     * We intentionally do NOT add "prefixAliases" here because
+     * your command system already handles aliases globally.
+     */
     async execute(interaction, config, client) {
         try {
             const targetUser =
@@ -37,18 +47,28 @@ export default {
                 throw new TitanBotError(
                     'Missing target user',
                     ErrorTypes.USER_INPUT,
-                    'You must specify a user to untimeout.',
-                    {
-                        subtype: 'invalid_user',
-                    }
+                    'You must specify a user to untimeout.'
                 );
             }
 
-            const member =
-                interaction.options.getMember('target') ||
-                await interaction.guild.members
-                    .fetch(targetUser.id)
-                    .catch(() => null);
+            /*
+             * Get the member from the guild.
+             *
+             * For prefix commands, messageAdapter.js creates
+             * a mock interaction, so getMember('target') can
+             * return null if the member is not cached.
+             *
+             * Therefore we fall back to fetching the member.
+             */
+            let member =
+                interaction.options.getMember('target');
+
+            if (!member && interaction.guild) {
+                member =
+                    await interaction.guild.members
+                        .fetch(targetUser.id)
+                        .catch(() => null);
+            }
 
             if (!member) {
                 throw new TitanBotError(
@@ -59,25 +79,26 @@ export default {
             }
 
             /*
-             * Check whether the user actually has a timeout
-             * OR still has the special muted role.
-             *
-             * This is important because your bot uses both:
-             *
-             * 1. Discord's native timeout
-             * 2. Your MUTED_ROLE_ID
+             * Check both Discord's native timeout and the
+             * custom muted role used by your moderation system.
              */
+            const timeoutUntil =
+                member.communicationDisabledUntilTimestamp;
+
             const currentlyTimedOut =
-                member.communicationDisabledUntilTimestamp !== null &&
-                member.communicationDisabledUntilTimestamp !== undefined &&
-                member.communicationDisabledUntilTimestamp > Date.now();
+                timeoutUntil !== null &&
+                timeoutUntil !== undefined &&
+                timeoutUntil > Date.now();
 
             const hasMutedRole =
                 member.roles.cache.has(
-                    '1537615321438093425'
+                    MUTED_ROLE_ID
                 );
 
-            if (!currentlyTimedOut && !hasMutedRole) {
+            if (
+                !currentlyTimedOut &&
+                !hasMutedRole
+            ) {
                 await InteractionHelper.universalReply(
                     interaction,
                     {
@@ -93,21 +114,21 @@ export default {
             }
 
             /*
-             * Remove the Discord timeout and restore the
-             * user's previous roles.
+             * Remove the timeout and restore the user's
+             * previous roles.
              */
-            await ModerationService.removeTimeoutUser({
-                guild: interaction.guild,
-                member,
-                moderator: interaction.member,
-                reason:
-                    `Timeout removed by ${interaction.user.tag}`,
-            });
+            const result =
+                await ModerationService.removeTimeoutUser({
+                    guild: interaction.guild,
+                    member,
+                    moderator: interaction.member,
+                    reason:
+                        `Timeout removed by ${interaction.user.tag}`,
+                });
 
             /*
-             * Tell anti-spam that the timeout was manually
-             * removed so stale anti-spam state doesn't
-             * immediately interfere with the user.
+             * Tell the anti-spam system that this timeout
+             * was manually removed.
              */
             try {
                 markSpamTimeoutManuallyRemoved(
@@ -115,14 +136,19 @@ export default {
                     targetUser.id
                 );
             } catch (spamError) {
+                /*
+                 * The timeout removal already succeeded, so
+                 * an anti-spam state error should not make
+                 * the command appear to have failed.
+                 */
                 logger.error(
-                    `Failed to update anti-spam timeout state for ${targetUser.tag}:`,
+                    `Failed to update anti-spam timeout state for ${targetUser.tag} (${targetUser.id}):`,
                     spamError
                 );
             }
 
             logger.info(
-                `User ${targetUser.tag} (${targetUser.id}) was untimeouted by ${interaction.user.tag} (${interaction.user.id}).`
+                `User ${targetUser.tag} (${targetUser.id}) was manually untimeouted by ${interaction.user.tag} (${interaction.user.id}).`
             );
 
             await InteractionHelper.universalReply(
@@ -135,6 +161,8 @@ export default {
                     ],
                 }
             );
+
+            return result;
         } catch (error) {
             logger.error(
                 'Failed to untimeout user:',
