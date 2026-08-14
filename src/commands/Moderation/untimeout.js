@@ -40,19 +40,23 @@ export default {
             const targetUser =
                 interaction.options.getUser('target');
 
-            const member =
-                interaction.options.getMember('target');
-
             if (!targetUser) {
                 throw new TitanBotError(
                     'Missing target user',
                     ErrorTypes.USER_INPUT,
-                    'You must specify a user to untimeout.',
-                    {
-                        subtype: 'invalid_user',
-                    }
+                    'You must specify a user to untimeout.'
                 );
             }
+
+            /*
+             * Fetch the member directly instead of relying only
+             * on getMember(). This makes the command more reliable
+             * if the interaction's resolved member is unavailable.
+             */
+            const member =
+                await interaction.guild.members
+                    .fetch(targetUser.id)
+                    .catch(() => null);
 
             if (!member) {
                 throw new TitanBotError(
@@ -63,20 +67,33 @@ export default {
             }
 
             /*
-             * Check the actual Discord timeout state.
+             * Check both Discord's actual timeout state and
+             * whether our timeout system has saved role data.
              *
-             * communicationDisabledUntilTimestamp is null
-             * when the member is not timed out.
+             * removeTimeoutUser() handles the saved role state,
+             * muted role, timeout, and restoration.
              */
-            const timeoutUntil =
-                member.communicationDisabledUntilTimestamp;
-
             const currentlyTimedOut =
-                timeoutUntil !== null &&
-                timeoutUntil !== undefined &&
-                timeoutUntil > Date.now();
+                member.communicationDisabledUntilTimestamp !== null &&
+                member.communicationDisabledUntilTimestamp !== undefined &&
+                member.communicationDisabledUntilTimestamp > Date.now();
 
-            if (!currentlyTimedOut) {
+            const MUTED_ROLE_ID =
+                '1537615321438093425';
+
+            const hasMutedRole =
+                member.roles.cache.has(
+                    MUTED_ROLE_ID
+                );
+
+            /*
+             * If Discord says the user isn't timed out and they
+             * don't have our muted role, there is nothing to remove.
+             */
+            if (
+                !currentlyTimedOut &&
+                !hasMutedRole
+            ) {
                 await InteractionHelper.safeEditReply(
                     interaction,
                     {
@@ -92,19 +109,21 @@ export default {
             }
 
             /*
-             * Remove the Discord timeout.
+             * Remove timeout, cancel the restoration timer,
+             * remove the muted role, and restore previous roles.
              */
-            await ModerationService.removeTimeoutUser({
-                guild: interaction.guild,
-                member,
-                moderator: interaction.member,
-            });
+            const result =
+                await ModerationService.removeTimeoutUser({
+                    guild: interaction.guild,
+                    member,
+                    moderator: interaction.member,
+                    reason:
+                        `Timeout manually removed by ${interaction.user.tag}`,
+                });
 
             /*
-             * IMPORTANT:
              * Tell the anti-spam system that this timeout was
-             * manually removed so it does not immediately
-             * restore the timeout from stale anti-spam state.
+             * intentionally removed by a moderator.
              */
             try {
                 markSpamTimeoutManuallyRemoved(
@@ -113,8 +132,8 @@ export default {
                 );
             } catch (spamError) {
                 /*
-                 * Do not undo a successful untimeout just because
-                 * the anti-spam state update failed.
+                 * Anti-spam state failing should NOT make a
+                 * successful untimeout fail.
                  */
                 logger.error(
                     `Failed to update anti-spam timeout state for ${targetUser.tag} (${targetUser.id}):`,
@@ -123,16 +142,25 @@ export default {
             }
 
             logger.info(
-                `User ${targetUser.tag} (${targetUser.id}) was manually untimeouted by ${interaction.user.tag} (${interaction.user.id}).`
+                `User ${targetUser.tag} (${targetUser.id}) was manually untimeouted by ${interaction.user.tag} (${interaction.user.id}) in ${interaction.guild.name}.`
             );
+
+            let message =
+                `🔓 **Removed timeout** from ${targetUser.tag}`;
+
+            if (
+                result &&
+                result.restored === false
+            ) {
+                message +=
+                    `\n⚠️ Some previous roles could not be restored because they are no longer manageable by the bot.`;
+            }
 
             await InteractionHelper.safeEditReply(
                 interaction,
                 {
                     embeds: [
-                        successEmbed(
-                            `🔓 **Removed timeout** from ${targetUser.tag}`
-                        ),
+                        successEmbed(message),
                     ],
                 }
             );
@@ -142,6 +170,10 @@ export default {
                 error
             );
 
+            /*
+             * If this is one of our known TitanBot errors,
+             * let the normal error handler handle it.
+             */
             throw error;
         }
     },
