@@ -3,6 +3,7 @@ import { successEmbed } from '../../utils/embeds.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
 import { ModerationService } from '../../services/moderation/moderationService.js';
 import { TitanBotError, ErrorTypes } from '../../utils/errorHandler.js';
+import { isModerationExempt } from '../../utils/moderation.js';
 
 export default {
     data: new SlashCommandBuilder()
@@ -18,11 +19,14 @@ export default {
             option.setName("reason").setDescription("Reason for the ban"),
         )
         .setDefaultMemberPermissions(PermissionFlagsBits.BanMembers),
+
     category: "moderation",
 
     async execute(interaction, config, client) {
         const user = interaction.options.getUser("target");
-        const reason = interaction.options.getString("reason") || "No reason provided";
+        const reason =
+            interaction.options.getString("reason") ||
+            "No reason provided";
 
         if (!user) {
             throw new TitanBotError(
@@ -33,6 +37,15 @@ export default {
             );
         }
 
+        // Moderation exemption
+        if (isModerationExempt(user.id)) {
+            throw new TitanBotError(
+                "User is moderation exempt",
+                ErrorTypes.VALIDATION,
+                "This user is exempt from all moderation actions.",
+            );
+        }
+
         if (user.id === interaction.user.id) {
             throw new TitanBotError(
                 'Cannot ban self',
@@ -40,6 +53,7 @@ export default {
                 'You cannot ban yourself.',
             );
         }
+
         if (user.id === client.user.id) {
             throw new TitanBotError(
                 'Cannot ban bot',
