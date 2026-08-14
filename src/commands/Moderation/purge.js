@@ -46,37 +46,49 @@ export default {
     }
 
     try {
-      // Slash commands are not normal channel messages.
       const isSlashCommand =
         typeof interaction.isChatInputCommand === 'function'
           ? interaction.isChatInputCommand()
           : false;
 
-      let messagesToDelete;
+      let deletedCount = 0;
 
       if (isSlashCommand) {
-        // Slash command: fetch exactly the requested amount.
-        const fetched = await channel.messages.fetch({
+        // Slash command:
+        // Fetch and delete exactly the requested amount.
+        const messages = await channel.messages.fetch({
           limit: amount
         });
 
-        messagesToDelete = fetched;
+        const deleted = await channel.bulkDelete(messages, true);
+        deletedCount = deleted.size;
+
       } else {
-        // Prefix command: the prefix command itself is the newest message.
-        // Fetch one extra message, then leave the newest one untouched.
+        // Prefix command:
+        // The newest message is the .purge command itself.
+        // Fetch one extra message so we can delete the requested
+        // number of messages WITHOUT counting the command.
         const fetched = await channel.messages.fetch({
           limit: Math.min(amount + 1, 100)
         });
 
         const commandMessage = fetched.first();
 
-        messagesToDelete = fetched
+        const messagesToDelete = fetched
           .filter(message => message.id !== commandMessage?.id)
           .first(amount);
-      }
 
-      const deleted = await channel.bulkDelete(messagesToDelete, true);
-      const deletedCount = deleted.size;
+        // Delete the requested messages first.
+        const deleted = await channel.bulkDelete(messagesToDelete, true);
+        deletedCount = deleted.size;
+
+        // Delete the .purge command itself.
+        if (commandMessage) {
+          await commandMessage.delete().catch(error => {
+            logger.debug('Failed to delete purge command message:', error);
+          });
+        }
+      }
 
       await logEvent({
         client,
