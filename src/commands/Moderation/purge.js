@@ -46,19 +46,34 @@ export default {
     }
 
     try {
-      // Fetch one extra message because the prefix command itself
-      // (.purge 8) is a normal Discord message.
-      const fetched = await channel.messages.fetch({
-        limit: Math.min(amount + 1, 100)
-      });
+      // Slash commands are not normal channel messages.
+      const isSlashCommand =
+        typeof interaction.isChatInputCommand === 'function'
+          ? interaction.isChatInputCommand()
+          : false;
 
-      // Remove the command message from the messages that will be deleted.
-      if (interaction.message?.id) {
-        fetched.delete(interaction.message.id);
+      let messagesToDelete;
+
+      if (isSlashCommand) {
+        // Slash command: fetch exactly the requested amount.
+        const fetched = await channel.messages.fetch({
+          limit: amount
+        });
+
+        messagesToDelete = fetched;
+      } else {
+        // Prefix command: the prefix command itself is the newest message.
+        // Fetch one extra message, then leave the newest one untouched.
+        const fetched = await channel.messages.fetch({
+          limit: Math.min(amount + 1, 100)
+        });
+
+        const commandMessage = fetched.first();
+
+        messagesToDelete = fetched
+          .filter(message => message.id !== commandMessage?.id)
+          .first(amount);
       }
-
-      // Only delete the requested amount of actual messages.
-      const messagesToDelete = fetched.first(amount);
 
       const deleted = await channel.bulkDelete(messagesToDelete, true);
       const deletedCount = deleted.size;
@@ -101,7 +116,8 @@ export default {
 
       await replyUserError(interaction, {
         type: ErrorTypes.UNKNOWN,
-        message: 'An unexpected error occurred during message deletion. Note: Messages older than 14 days cannot be bulk deleted.'
+        message:
+          'An unexpected error occurred during message deletion. Note: Messages older than 14 days cannot be bulk deleted.'
       });
     }
   }
