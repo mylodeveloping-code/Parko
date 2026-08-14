@@ -62,7 +62,7 @@ const SECOND_TIMEOUT_MS = 60 * 60 * 1000;
 
 const THIRTY_DAY_BAN_MS = 30 * 24 * 60 * 60 * 1000;
 
-// guildId -> userId -> timestamps[]
+// guildId -> userId -> recent message objects
 const spamTracker = new Map();
 
 // guildId:userId -> offense level
@@ -75,8 +75,7 @@ const spamTracker = new Map();
 // 5 = warning #3 + 30 day ban
 const spamEscalation = new Map();
 
-// Prevents duplicate punishments from being processed
-// simultaneously.
+// Prevent duplicate punishment processing.
 const spamProcessing = new Set();
 
 // ============================================================
@@ -88,12 +87,16 @@ export default {
 
   async execute(message, client) {
     try {
-      if (message.author.bot || !message.guild) return;
+      if (message.author.bot || !message.guild) {
+        return;
+      }
 
       logger.debug(
         `Message received from ${message.author.tag}: ${message.content}`
       );
 
+      // Anti-spam runs first so spam messages can be removed
+      // before other message processing occurs.
       await handleAntiSpam(message, client);
 
       const countingProcessed =
@@ -130,7 +133,8 @@ async function sendSpamTimeoutDM(
     const nextAction = {
       1: 'Further spam will result in a 1-hour timeout.',
       2: 'Further spam will result in a warning.',
-    }[offense] || 'Further spam may result in additional moderation action.';
+    }[offense] ||
+      'Further spam may result in additional moderation action.';
 
     await user.send({
       embeds: [
@@ -247,7 +251,7 @@ async function handleAntiSpam(message, client) {
     const guildId = message.guild.id;
     const userId = message.author.id;
 
-    // Never moderate exempt users.
+    // Exempt users are completely ignored by anti-spam.
     if (isModerationExempt(userId)) {
       return;
     }
@@ -260,7 +264,7 @@ async function handleAntiSpam(message, client) {
       return;
     }
 
-    // Don't count messages while the user is currently timed out.
+    // Don't count messages while already timed out.
     if (
       member.communicationDisabledUntilTimestamp &&
       member.communicationDisabledUntilTimestamp > Date.now()
@@ -280,22 +284,28 @@ async function handleAntiSpam(message, client) {
       guildTracker.set(userId, []);
     }
 
-    const timestamps = guildTracker.get(userId);
+    const messages = guildTracker.get(userId);
 
-    const recentTimestamps = timestamps.filter(
-      (timestamp) =>
-        now - timestamp <= SPAM_WINDOW_MS
+    // Keep only messages from the last 2.5 seconds.
+    const recentMessages = messages.filter(
+      (entry) =>
+        now - entry.timestamp <= SPAM_WINDOW_MS
     );
 
-    recentTimestamps.push(now);
+    // Store the actual Discord message as well as its timestamp.
+    recentMessages.push({
+      timestamp: now,
+      message,
+    });
 
     guildTracker.set(
       userId,
-      recentTimestamps
+      recentMessages
     );
 
+    // Need 5 messages within 2.5 seconds.
     if (
-      recentTimestamps.length <
+      recentMessages.length <
       SPAM_MESSAGE_COUNT
     ) {
       return;
@@ -310,17 +320,89 @@ async function handleAntiSpam(message, client) {
 
     spamProcessing.add(processingKey);
 
-    // Reset the current burst.
-    guildTracker.set(userId, []);
-
     try {
+      const spamMessages = [...recentMessages];
+
+      // Reset the tracker immediately.
+      guildTracker.set(userId, []);
+
+      /*
+       * SAME MESSAGE:
+       *
+       * hi
+       * hi
+       * hi
+       * hi
+       * hi
+       *
+       * Keep the first "hi".
+       * Delete the other four.
+       *
+       * DIFFERENT MESSAGES:
+       *
+       * alfdkjl
+       * dkja
+       * hello
+       * test
+       * yo
+       *
+       * Delete all five.
+       */
+
+      const normalizedContents =
+        spamMessages.map(
+          (entry) =>
+            entry.message.content.trim()
+        );
+
+      const firstContent =
+        normalizedContents[0];
+
+      const allIdentical =
+        normalizedContents.every(
+          (content) =>
+            content === firstContent
+        );
+
+      if (allIdentical) {
+        // Keep the first message.
+        // Delete all duplicate messages.
+        const messagesToDelete =
+          spamMessages
+            .slice(1)
+            .map(
+              (entry) =>
+                entry.message
+            );
+
+        await Promise.all(
+          messagesToDelete.map(
+            (msg) =>
+              msg.delete().catch(() => {})
+          )
+        );
+      } else {
+        // Different messages = delete every message
+        // in the detected spam burst.
+        await Promise.all(
+          spamMessages.map(
+            (entry) =>
+              entry.message
+                .delete()
+                .catch(() => {})
+          )
+        );
+      }
+
       await processSpamOffense(
         message,
         member,
         client
       );
     } finally {
-      spamProcessing.delete(processingKey);
+      spamProcessing.delete(
+        processingKey
+      );
     }
   } catch (error) {
     logger.error(
@@ -384,7 +466,6 @@ async function processSpamOffense(
     const reason =
       'Automatic anti-spam: 5 messages within 2.5 seconds.';
 
-    // DM BEFORE timeout so the user is notified.
     await sendSpamTimeoutDM(
       message.author,
       message.guild,
@@ -394,14 +475,13 @@ async function processSpamOffense(
     );
 
     try {
-      const result =
-        await ModerationService.timeoutUser({
-          guild: message.guild,
-          member,
-          moderator,
-          durationMs: FIRST_TIMEOUT_MS,
-          reason,
-        });
+      await ModerationService.timeoutUser({
+        guild: message.guild,
+        member,
+        moderator,
+        durationMs: FIRST_TIMEOUT_MS,
+        reason,
+      });
 
       await logModerationAction({
         client,
@@ -451,14 +531,13 @@ async function processSpamOffense(
     );
 
     try {
-      const result =
-        await ModerationService.timeoutUser({
-          guild: message.guild,
-          member,
-          moderator,
-          durationMs: SECOND_TIMEOUT_MS,
-          reason,
-        });
+      await ModerationService.timeoutUser({
+        guild: message.guild,
+        member,
+        moderator,
+        durationMs: SECOND_TIMEOUT_MS,
+        reason,
+      });
 
       await logModerationAction({
         client,
@@ -539,12 +618,10 @@ async function processSpamOffense(
         reason,
       });
 
-    // Check exemption again before the ban.
     if (isModerationExempt(userId)) {
       return;
     }
 
-    // Notify the user before banning them.
     await sendSpamBanDM(
       message.author,
       message.guild,
@@ -576,7 +653,8 @@ async function processSpamOffense(
             automatic: true,
             spamOffense: 5,
             banDuration: '30 days',
-            warningId: warningResult?.warningId,
+            warningId:
+              warningResult?.warningId,
           },
         },
       });
@@ -1245,8 +1323,7 @@ async function handleLeveling(
       finalXP =
         Math.floor(
           finalXP *
-            levelingConfig
-              .xpMultiplier
+            levelingConfig.xpMultiplier
         );
     }
 
