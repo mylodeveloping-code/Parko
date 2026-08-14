@@ -24,9 +24,9 @@ export const botConfig = {
     activities: [
       {
         name: "Custom Status", // required by Discord API, not shown in the client
-        state: `Don't want to use slash commands? Use the prefix, "."`, // this is what people actually see
+        state: 'Use the prefix `.` for commands instead of slash commands.', // this is what people actually see
         type: 4, // Custom
-      },
+
     ],
   },
 
