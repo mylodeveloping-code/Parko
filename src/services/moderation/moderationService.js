@@ -3,7 +3,13 @@
 import { PermissionFlagsBits } from 'discord.js';
 import { logger } from '../../utils/logger.js';
 import { TitanBotError, ErrorTypes } from '../../utils/errorHandler.js';
-import { logModerationAction } from '../../utils/moderation.js';
+import {
+  logModerationAction,
+  saveTimeoutRoles,
+  getTimeoutRoles,
+  deleteTimeoutRoles,
+  MUTED_ROLE_ID,
+} from '../../utils/moderation.js';
 
 function getTargetLabel(target) {
   return target.user?.tag ?? target.displayName ?? 'this user';
@@ -36,16 +42,20 @@ export class ModerationService {
     if (actor === 'bot') {
       const botMember = target.guild?.members?.me;
       const botRole = getHighestRole(botMember);
+
       if (!botRole || !targetRole) {
         return `Bot role hierarchy blocked ${action} for ${targetLabel}`;
       }
+
       return `Bot role **${botRole.name}** is too low for **${targetRole.name}** — move the bot role higher`;
     }
 
     const modRole = getHighestRole(moderator);
+
     if (!modRole || !targetRole) {
       return `Role hierarchy blocked ${action} for ${targetLabel}`;
     }
+
     return `Your role **${modRole.name}** is too low for **${targetRole.name}** — move your role higher`;
   }
 
@@ -90,6 +100,7 @@ export class ModerationService {
     }
 
     const botMember = target.guild?.members?.me;
+
     if (!botMember) {
       return { valid: false, error: 'Bot is not in the guild' };
     }
@@ -122,13 +133,23 @@ export class ModerationService {
 
   static assertModerationHierarchy(moderator, target, action) {
     const botCheck = this.validateBotHierarchy(target, action);
+
     if (!botCheck.valid) {
-      throw new TitanBotError(botCheck.error, ErrorTypes.PERMISSION, botCheck.error);
+      throw new TitanBotError(
+        botCheck.error,
+        ErrorTypes.PERMISSION,
+        botCheck.error
+      );
     }
 
     const modCheck = this.validateHierarchy(moderator, target, action);
+
     if (!modCheck.valid) {
-      throw new TitanBotError(modCheck.error, ErrorTypes.PERMISSION, modCheck.error);
+      throw new TitanBotError(
+        modCheck.error,
+        ErrorTypes.PERMISSION,
+        modCheck.error
+      );
     }
   }
 
@@ -149,6 +170,7 @@ export class ModerationService {
       }
 
       let targetMember = null;
+
       try {
         targetMember = await guild.members.fetch(user.id).catch(() => null);
       } catch (err) {
@@ -158,19 +180,19 @@ export class ModerationService {
       if (targetMember) {
         this.assertModerationHierarchy(moderator, targetMember, 'ban');
       } else {
-
         const isOwner = guild.ownerId === moderator.id;
+
         const hasHighPerms = moderator.permissions.has([
-            PermissionFlagsBits.ManageGuild,
-            PermissionFlagsBits.Administrator
+          PermissionFlagsBits.ManageGuild,
+          PermissionFlagsBits.Administrator
         ]);
 
         if (!isOwner && !hasHighPerms) {
-            throw new TitanBotError(
-                'You do not have sufficient permissions to ban users who are not in the server.',
-                ErrorTypes.PERMISSION,
-                'You need "Manage Server" or "Administrator" permissions to ban users not currently in the guild.'
-            );
+          throw new TitanBotError(
+            'You do not have sufficient permissions to ban users who are not in the server.',
+            ErrorTypes.PERMISSION,
+            'You need "Manage Server" or "Administrator" permissions to ban users not currently in the guild.'
+          );
         }
       }
 
@@ -193,8 +215,10 @@ export class ModerationService {
         }
       });
 
-      logger.info(`User banned: ${user.tag} by ${moderator.user.tag} in ${guild.name}`);
-      
+      logger.info(
+        `User banned: ${user.tag} by ${moderator.user.tag} in ${guild.name}`
+      );
+
       return {
         caseId,
         user: user.tag,
@@ -225,6 +249,7 @@ export class ModerationService {
 
       if (!member.kickable) {
         const targetLabel = getTargetLabel(member);
+
         throw new TitanBotError(
           'Cannot kick member',
           ErrorTypes.PERMISSION,
@@ -250,8 +275,10 @@ export class ModerationService {
         }
       });
 
-      logger.info(`User kicked: ${member.user.tag} by ${moderator.user.tag} in ${guild.name}`);
-      
+      logger.info(
+        `User kicked: ${member.user.tag} by ${moderator.user.tag} in ${guild.name}`
+      );
+
       return {
         caseId,
         user: member.user.tag,
@@ -283,6 +310,7 @@ export class ModerationService {
 
       if (!member.moderatable) {
         const targetLabel = getTargetLabel(member);
+
         throw new TitanBotError(
           'Cannot timeout member',
           ErrorTypes.PERMISSION,
@@ -291,9 +319,78 @@ export class ModerationService {
         );
       }
 
+      const mutedRole = guild.roles.cache.get(MUTED_ROLE_ID);
+
+      if (!mutedRole) {
+        throw new TitanBotError(
+          'Muted role not found',
+          ErrorTypes.CONFIGURATION,
+          `The Muted role (${MUTED_ROLE_ID}) could not be found.`
+        );
+      }
+
+      if (!mutedRole.editable) {
+        throw new TitanBotError(
+          'Muted role not manageable',
+          ErrorTypes.PERMISSION,
+          'I cannot manage the Muted role. Make sure my bot role is above the Muted role.'
+        );
+      }
+
+      /*
+       * If the user is not already timed out, save their current roles.
+       * This prevents a second timeout from overwriting the original roles.
+       */
+      if (!member.isCommunicationDisabled()) {
+        const previousRoleIds = member.roles.cache
+          .filter(role => role.id !== guild.id)
+          .filter(role => role.id !== MUTED_ROLE_ID)
+          .filter(role => !role.managed)
+          .map(role => role.id);
+
+        const saved = await saveTimeoutRoles(
+          guild.id,
+          member.id,
+          previousRoleIds
+        );
+
+        if (!saved) {
+          throw new TitanBotError(
+            'Could not save previous roles',
+            ErrorTypes.DATABASE,
+            'I could not save the user\'s previous roles, so the timeout was not applied.'
+          );
+        }
+      }
+
+      /*
+       * Remove all manageable roles except @everyone,
+       * then add the Muted role.
+       */
+      const rolesToRemove = member.roles.cache
+        .filter(role => role.id !== guild.id)
+        .filter(role => role.id !== MUTED_ROLE_ID)
+        .filter(role => !role.managed)
+        .filter(role => role.editable);
+
+      if (rolesToRemove.size > 0) {
+        await member.roles.remove(
+          rolesToRemove,
+          'Applying timeout mute role'
+        );
+      }
+
+      if (!member.roles.cache.has(MUTED_ROLE_ID)) {
+        await member.roles.add(
+          mutedRole,
+          'Applying timeout mute role'
+        );
+      }
+
       await member.timeout(durationMs, reason);
 
       const durationMinutes = Math.floor(durationMs / 60000);
+
       const caseId = await logModerationAction({
         client: guild.client,
         guild,
@@ -311,8 +408,10 @@ export class ModerationService {
         }
       });
 
-      logger.info(`User timed out: ${member.user.tag} by ${moderator.user.tag} in ${guild.name}`);
-      
+      logger.info(
+        `User timed out and muted: ${member.user.tag} by ${moderator.user.tag} in ${guild.name}`
+      );
+
       return {
         caseId,
         user: member.user.tag,
@@ -340,10 +439,15 @@ export class ModerationService {
         );
       }
 
-      this.assertModerationHierarchy(moderator, member, 'remove the timeout from');
+      this.assertModerationHierarchy(
+        moderator,
+        member,
+        'remove the timeout from'
+      );
 
       if (!member.moderatable) {
         const targetLabel = getTargetLabel(member);
+
         throw new TitanBotError(
           'Cannot modify member',
           ErrorTypes.PERMISSION,
@@ -362,6 +466,44 @@ export class ModerationService {
 
       await member.timeout(null, reason);
 
+      const saved = await getTimeoutRoles(
+        guild.id,
+        member.id
+      );
+
+      const mutedRole = guild.roles.cache.get(MUTED_ROLE_ID);
+
+      if (
+        mutedRole &&
+        member.roles.cache.has(MUTED_ROLE_ID) &&
+        mutedRole.editable
+      ) {
+        await member.roles.remove(
+          mutedRole,
+          'Removing timeout mute role'
+        );
+      }
+
+      if (saved?.roleIds?.length) {
+        const rolesToRestore = saved.roleIds
+          .map(roleId => guild.roles.cache.get(roleId))
+          .filter(role => role)
+          .filter(role => !role.managed)
+          .filter(role => role.editable);
+
+        if (rolesToRestore.length > 0) {
+          await member.roles.add(
+            rolesToRestore,
+            'Restoring roles after timeout'
+          );
+        }
+      }
+
+      await deleteTimeoutRoles(
+        guild.id,
+        member.id
+      );
+
       await logModerationAction({
         client: guild.client,
         guild,
@@ -377,8 +519,10 @@ export class ModerationService {
         }
       });
 
-      logger.info(`Timeout removed: ${member.user.tag} by ${moderator.user.tag} in ${guild.name}`);
-      
+      logger.info(
+        `Timeout removed and roles restored: ${member.user.tag} by ${moderator.user.tag} in ${guild.name}`
+      );
+
       return {
         user: member.user.tag
       };
@@ -431,8 +575,10 @@ export class ModerationService {
         }
       });
 
-      logger.info(`User unbanned: ${user.tag} by ${moderator.user.tag} in ${guild.name}`);
-      
+      logger.info(
+        `User unbanned: ${user.tag} by ${moderator.user.tag} in ${guild.name}`
+      );
+
       return {
         caseId,
         user: user.tag,
