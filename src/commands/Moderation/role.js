@@ -9,78 +9,117 @@ export default {
     usage: ".role <add|remove|toggle|has|info|list|create|delete|rename|color|hoist|mentionable> ...",
 
     async execute(message, args, config, client) {
-        if (!message.guild) return;
+        try {
+            if (!message.guild) return;
 
-        const subcommand = args.shift()?.toLowerCase();
+            console.log(
+                `[ROLE] Command executed by ${message.author.tag}:`,
+                message.content
+            );
 
-        if (!subcommand || subcommand === "help") {
-            return sendHelp(message);
-        }
+            const subcommand = args.shift()?.toLowerCase();
 
-        // ─────────────────────────────────────────────
-        // PERMISSIONS
-        // ─────────────────────────────────────────────
+            if (!subcommand || subcommand === "help") {
+                return sendHelp(message);
+            }
 
-        if (!message.member.permissions.has(PermissionFlagsBits.ManageRoles)) {
-            return message.reply({
-                content: "❌ You need the **Manage Roles** permission to use this command.",
-            });
-        }
+            // ─────────────────────────────────────────
+            // PERMISSIONS
+            // ─────────────────────────────────────────
 
-        const botMember = await message.guild.members.fetchMe();
-
-        if (!botMember.permissions.has(PermissionFlagsBits.ManageRoles)) {
-            return message.reply({
-                content: "❌ I don't have the **Manage Roles** permission.",
-            });
-        }
-
-        // ─────────────────────────────────────────────
-        // ADD
-        // .role add @user @role
-        // ─────────────────────────────────────────────
-
-        if (subcommand === "add") {
-            const target = await resolveMember(message, args[0]);
-
-            if (!target) {
+            if (
+                !message.member.permissions.has(
+                    PermissionFlagsBits.ManageRoles
+                )
+            ) {
                 return message.reply({
                     content:
-                        "❌ Please specify a valid user.\nUsage: `.role add @user @role`",
+                        "❌ You need the **Manage Roles** permission to use this command.",
                 });
             }
 
-            const roleInput = args.slice(1).join(" ").trim();
+            const botMember = await message.guild.members.fetch(
+                client.user.id
+            );
 
-            if (!roleInput) {
+            if (
+                !botMember.permissions.has(
+                    PermissionFlagsBits.ManageRoles
+                )
+            ) {
                 return message.reply({
                     content:
-                        "❌ Please specify a role.\nUsage: `.role add @user @role`",
+                        "❌ I don't have the **Manage Roles** permission.",
                 });
             }
 
-            const role = await findRole(message.guild, roleInput);
+            // ─────────────────────────────────────────
+            // ADD
+            // .role add @user @role
+            // ─────────────────────────────────────────
 
-            if (!role) {
-                return message.reply({
-                    content: `❌ I couldn't find the role **${roleInput}**.`,
-                });
-            }
+            if (subcommand === "add") {
+                if (!args[0]) {
+                    return message.reply({
+                        content:
+                            "❌ Usage: `.role add @user @role`",
+                    });
+                }
 
-            if (!canBotManageRole(botMember, role)) {
-                return message.reply({
-                    content:
-                        `❌ I cannot manage ${role.name}. Make sure my highest role is above it.`,
-                });
-            }
+                const target = await resolveMember(
+                    message.guild,
+                    args[0]
+                );
 
-            if (target.roles.cache.has(role.id)) {
-                return message.reply({
-                    content: `⚠️ ${target} already has ${role}.`,
-                });
-            }
+                if (!target) {
+                    return message.reply({
+                        content:
+                            "❌ I couldn't find that user.",
+                    });
+                }
 
-            try {
+                const roleInput = args
+                    .slice(1)
+                    .join(" ")
+                    .trim();
+
+                if (!roleInput) {
+                    return message.reply({
+                        content:
+                            "❌ Please specify a role.\nUsage: `.role add @user @role`",
+                    });
+                }
+
+                const role = await findRole(
+                    message.guild,
+                    roleInput
+                );
+
+                if (!role) {
+                    return message.reply({
+                        content:
+                            `❌ I couldn't find the role **${roleInput}**.`,
+                    });
+                }
+
+                const check = canBotManageRole(
+                    botMember,
+                    role
+                );
+
+                if (!check.canManage) {
+                    return message.reply({
+                        content: check.message,
+                    });
+                }
+
+                if (target.roles.cache.has(role.id)) {
+                    return message.reply({
+                        content:
+                            `⚠️ ${target} already has ${role}.`,
+                    });
+                }
+
                 await target.roles.add(
                     role,
                     `Role added by ${message.author.tag}`
@@ -94,61 +133,67 @@ export default {
                         ),
                     ],
                 });
-            } catch (error) {
-                console.error("Role add error:", error);
-
-                return message.reply({
-                    content:
-                        "❌ I couldn't add that role to the user. Make sure the role is below my highest role.",
-                });
-            }
-        }
-
-        // ─────────────────────────────────────────────
-        // REMOVE
-        // ─────────────────────────────────────────────
-
-        if (subcommand === "remove") {
-            const target = await resolveMember(message, args[0]);
-
-            if (!target) {
-                return message.reply({
-                    content:
-                        "❌ Please specify a valid user.\nUsage: `.role remove @user @role`",
-                });
             }
 
-            const roleInput = args.slice(1).join(" ").trim();
+            // ─────────────────────────────────────────
+            // REMOVE
+            // ─────────────────────────────────────────
 
-            if (!roleInput) {
-                return message.reply({
-                    content:
-                        "❌ Please specify a role.\nUsage: `.role remove @user @role`",
-                });
-            }
+            if (subcommand === "remove") {
+                const target = await resolveMember(
+                    message.guild,
+                    args[0]
+                );
 
-            const role = await findRole(message.guild, roleInput);
+                if (!target) {
+                    return message.reply({
+                        content:
+                            "❌ Usage: `.role remove @user @role`",
+                    });
+                }
 
-            if (!role) {
-                return message.reply({
-                    content: `❌ I couldn't find the role **${roleInput}**.`,
-                });
-            }
+                const roleInput = args
+                    .slice(1)
+                    .join(" ")
+                    .trim();
 
-            if (!canBotManageRole(botMember, role)) {
-                return message.reply({
-                    content:
-                        `❌ I cannot manage ${role.name}. Make sure my highest role is above it.`,
-                });
-            }
+                if (!roleInput) {
+                    return message.reply({
+                        content:
+                            "❌ Please specify a role.",
+                    });
+                }
 
-            if (!target.roles.cache.has(role.id)) {
-                return message.reply({
-                    content: `⚠️ ${target} doesn't have ${role}.`,
-                });
-            }
+                const role = await findRole(
+                    message.guild,
+                    roleInput
+                );
 
-            try {
+                if (!role) {
+                    return message.reply({
+                        content:
+                            `❌ I couldn't find the role **${roleInput}**.`,
+                    });
+                }
+
+                const check = canBotManageRole(
+                    botMember,
+                    role
+                );
+
+                if (!check.canManage) {
+                    return message.reply({
+                        content: check.message,
+                    });
+                }
+
+                if (!target.roles.cache.has(role.id)) {
+                    return message.reply({
+                        content:
+                            `⚠️ ${target} doesn't have ${role}.`,
+                    });
+                }
+
                 await target.roles.remove(
                     role,
                     `Role removed by ${message.author.tag}`
@@ -162,55 +207,53 @@ export default {
                         ),
                     ],
                 });
-            } catch (error) {
-                console.error("Role remove error:", error);
-
-                return message.reply({
-                    content:
-                        "❌ I couldn't remove that role from the user.",
-                });
-            }
-        }
-
-        // ─────────────────────────────────────────────
-        // TOGGLE
-        // ─────────────────────────────────────────────
-
-        if (subcommand === "toggle") {
-            const target = await resolveMember(message, args[0]);
-
-            if (!target) {
-                return message.reply({
-                    content:
-                        "❌ Please specify a valid user.\nUsage: `.role toggle @user @role`",
-                });
             }
 
-            const roleInput = args.slice(1).join(" ").trim();
+            // ─────────────────────────────────────────
+            // TOGGLE
+            // ─────────────────────────────────────────
 
-            if (!roleInput) {
-                return message.reply({
-                    content:
-                        "❌ Please specify a role.\nUsage: `.role toggle @user @role`",
-                });
-            }
+            if (subcommand === "toggle") {
+                const target = await resolveMember(
+                    message.guild,
+                    args[0]
+                );
 
-            const role = await findRole(message.guild, roleInput);
+                const roleInput = args
+                    .slice(1)
+                    .join(" ")
+                    .trim();
 
-            if (!role) {
-                return message.reply({
-                    content: `❌ I couldn't find the role **${roleInput}**.`,
-                });
-            }
+                if (!target || !roleInput) {
+                    return message.reply({
+                        content:
+                            "❌ Usage: `.role toggle @user @role`",
+                    });
+                }
 
-            if (!canBotManageRole(botMember, role)) {
-                return message.reply({
-                    content:
-                        `❌ I cannot manage ${role.name}. Make sure my highest role is above it.`,
-                });
-            }
+                const role = await findRole(
+                    message.guild,
+                    roleInput
+                );
 
-            try {
+                if (!role) {
+                    return message.reply({
+                        content:
+                            `❌ I couldn't find the role **${roleInput}**.`,
+                    });
+                }
+
+                const check = canBotManageRole(
+                    botMember,
+                    role
+                );
+
+                if (!check.canManage) {
+                    return message.reply({
+                        content: check.message,
+                    });
+                }
+
                 if (target.roles.cache.has(role.id)) {
                     await target.roles.remove(
                         role,
@@ -240,193 +283,230 @@ export default {
                         ),
                     ],
                 });
-            } catch (error) {
-                console.error("Role toggle error:", error);
-
-                return message.reply({
-                    content:
-                        "❌ I couldn't toggle that role.",
-                });
-            }
-        }
-
-        // ─────────────────────────────────────────────
-        // HAS
-        // ─────────────────────────────────────────────
-
-        if (subcommand === "has") {
-            const target = await resolveMember(message, args[0]);
-            const roleInput = args.slice(1).join(" ").trim();
-
-            if (!target || !roleInput) {
-                return message.reply({
-                    content:
-                        "❌ Usage: `.role has @user @role`",
-                });
             }
 
-            const role = await findRole(message.guild, roleInput);
+            // ─────────────────────────────────────────
+            // HAS
+            // ─────────────────────────────────────────
 
-            if (!role) {
+            if (subcommand === "has") {
+                const target = await resolveMember(
+                    message.guild,
+                    args[0]
+                );
+
+                const roleInput = args
+                    .slice(1)
+                    .join(" ")
+                    .trim();
+
+                if (!target || !roleInput) {
+                    return message.reply({
+                        content:
+                            "❌ Usage: `.role has @user @role`",
+                    });
+                }
+
+                const role = await findRole(
+                    message.guild,
+                    roleInput
+                );
+
+                if (!role) {
+                    return message.reply({
+                        content:
+                            `❌ I couldn't find the role **${roleInput}**.`,
+                    });
+                }
+
+                const hasRole =
+                    target.roles.cache.has(role.id);
+
                 return message.reply({
-                    content: `❌ I couldn't find the role **${roleInput}**.`,
-                });
-            }
-
-            const hasRole = target.roles.cache.has(role.id);
-
-            return message.reply({
-                embeds: [
-                    new EmbedBuilder()
-                        .setColor(hasRole ? 0x57f287 : 0xed4245)
-                        .setTitle("Role Check")
-                        .setDescription(
-                            `${target} ${
-                                hasRole ? "has" : "does not have"
-                            } ${role}.`
-                        ),
-                ],
-            });
-        }
-
-        // ─────────────────────────────────────────────
-        // INFO
-        // ─────────────────────────────────────────────
-
-        if (subcommand === "info") {
-            const roleInput = args.join(" ").trim();
-
-            if (!roleInput) {
-                return message.reply({
-                    content:
-                        "❌ Usage: `.role info @role`",
+                    embeds: [
+                        new EmbedBuilder()
+                            .setColor(
+                                hasRole
+                                    ? 0x57f287
+                                    : 0xed4245
+                            )
+                            .setTitle("Role Check")
+                            .setDescription(
+                                `${target} ${
+                                    hasRole
+                                        ? "has"
+                                        : "does not have"
+                                } ${role}.`
+                            ),
+                    ],
                 });
             }
 
-            const role = await findRole(message.guild, roleInput);
+            // ─────────────────────────────────────────
+            // INFO
+            // ─────────────────────────────────────────
 
-            if (!role) {
+            if (subcommand === "info") {
+                const roleInput = args
+                    .join(" ")
+                    .trim();
+
+                if (!roleInput) {
+                    return message.reply({
+                        content:
+                            "❌ Usage: `.role info @role`",
+                    });
+                }
+
+                const role = await findRole(
+                    message.guild,
+                    roleInput
+                );
+
+                if (!role) {
+                    return message.reply({
+                        content:
+                            `❌ I couldn't find the role **${roleInput}**.`,
+                    });
+                }
+
                 return message.reply({
-                    content: `❌ I couldn't find the role **${roleInput}**.`,
+                    embeds: [
+                        new EmbedBuilder()
+                            .setColor(
+                                role.color || 0x5865f2
+                            )
+                            .setTitle("Role Information")
+                            .addFields(
+                                {
+                                    name: "Name",
+                                    value: role.name,
+                                    inline: true,
+                                },
+                                {
+                                    name: "ID",
+                                    value: role.id,
+                                    inline: true,
+                                },
+                                {
+                                    name: "Position",
+                                    value: String(
+                                        role.position
+                                    ),
+                                    inline: true,
+                                },
+                                {
+                                    name: "Members",
+                                    value: String(
+                                        role.members.size
+                                    ),
+                                    inline: true,
+                                },
+                                {
+                                    name: "Color",
+                                    value: role.hexColor,
+                                    inline: true,
+                                },
+                                {
+                                    name: "Mentionable",
+                                    value: role.mentionable
+                                        ? "Yes"
+                                        : "No",
+                                    inline: true,
+                                },
+                                {
+                                    name: "Hoisted",
+                                    value: role.hoist
+                                        ? "Yes"
+                                        : "No",
+                                    inline: true,
+                                }
+                            ),
+                    ],
                 });
             }
 
-            const embed = new EmbedBuilder()
-                .setColor(role.color || 0x5865f2)
-                .setTitle("Role Information")
-                .addFields(
-                    {
-                        name: "Name",
-                        value: role.name,
-                        inline: true,
-                    },
-                    {
-                        name: "ID",
-                        value: role.id,
-                        inline: true,
-                    },
-                    {
-                        name: "Position",
-                        value: `${role.position}`,
-                        inline: true,
-                    },
-                    {
-                        name: "Members",
-                        value: `${role.members.size}`,
-                        inline: true,
-                    },
-                    {
-                        name: "Color",
-                        value: role.hexColor,
-                        inline: true,
-                    },
-                    {
-                        name: "Mentionable",
-                        value: role.mentionable ? "Yes" : "No",
-                        inline: true,
-                    },
-                    {
-                        name: "Hoisted",
-                        value: role.hoist ? "Yes" : "No",
-                        inline: true,
-                    }
-                )
-                .setFooter({
-                    text: `Created ${role.createdAt.toLocaleDateString()}`,
-                });
+            // ─────────────────────────────────────────
+            // LIST
+            // ─────────────────────────────────────────
 
-            return message.reply({
-                embeds: [embed],
-            });
-        }
-
-        // ─────────────────────────────────────────────
-        // LIST
-        // ─────────────────────────────────────────────
-
-        if (subcommand === "list") {
-            const roles = message.guild.roles.cache
-                .filter((role) => role.id !== message.guild.id)
-                .sort((a, b) => b.position - a.position);
-
-            const roleList = roles
-                .map((role) => `${role} — \`${role.id}\``)
-                .slice(0, 50)
-                .join("\n");
-
-            return message.reply({
-                embeds: [
-                    new EmbedBuilder()
-                        .setColor(0x5865f2)
-                        .setTitle("Server Roles")
-                        .setDescription(
-                            roleList || "No roles found."
+            if (subcommand === "list") {
+                const roles =
+                    message.guild.roles.cache
+                        .filter(
+                            (role) =>
+                                role.id !==
+                                message.guild.id
                         )
-                        .setFooter({
-                            text: `${roles.size} roles total`,
-                        }),
-                ],
-            });
-        }
+                        .sort(
+                            (a, b) =>
+                                b.position - a.position
+                        );
 
-        // ─────────────────────────────────────────────
-        // CREATE
-        // ─────────────────────────────────────────────
+                const list = roles
+                    .map(
+                        (role) =>
+                            `${role} — \`${role.id}\``
+                    )
+                    .slice(0, 50)
+                    .join("\n");
 
-        if (subcommand === "create") {
-            const name = args.join(" ").trim();
-
-            if (!name) {
                 return message.reply({
-                    content:
-                        "❌ Usage: `.role create <name>`",
+                    embeds: [
+                        new EmbedBuilder()
+                            .setColor(0x5865f2)
+                            .setTitle("Server Roles")
+                            .setDescription(
+                                list ||
+                                    "No roles found."
+                            )
+                            .setFooter({
+                                text: `${roles.size} roles total`,
+                            }),
+                    ],
                 });
             }
 
-            if (name.length > 100) {
-                return message.reply({
-                    content:
-                        "❌ Role names cannot be longer than 100 characters.",
-                });
-            }
+            // ─────────────────────────────────────────
+            // CREATE
+            // ─────────────────────────────────────────
 
-            const existingRole = message.guild.roles.cache.find(
-                (role) =>
-                    role.name.toLowerCase() === name.toLowerCase()
-            );
+            if (subcommand === "create") {
+                const name = args.join(" ").trim();
 
-            if (existingRole) {
-                return message.reply({
-                    content:
-                        `❌ A role named **${name}** already exists.`,
-                });
-            }
+                if (!name) {
+                    return message.reply({
+                        content:
+                            "❌ Usage: `.role create <name>`",
+                    });
+                }
 
-            try {
-                const role = await message.guild.roles.create({
-                    name,
-                    reason: `Created by ${message.author.tag}`,
-                });
+                if (name.length > 100) {
+                    return message.reply({
+                        content:
+                            "❌ Role names cannot be longer than 100 characters.",
+                    });
+                }
+
+                const existing =
+                    message.guild.roles.cache.find(
+                        (role) =>
+                            role.name.toLowerCase() ===
+                            name.toLowerCase()
+                    );
+
+                if (existing) {
+                    return message.reply({
+                        content:
+                            `❌ A role named **${name}** already exists.`,
+                    });
+                }
+
+                const role =
+                    await message.guild.roles.create({
+                        name,
+                        reason: `Created by ${message.author.tag}`,
+                    });
 
                 return message.reply({
                     embeds: [
@@ -436,47 +516,48 @@ export default {
                         ),
                     ],
                 });
-            } catch (error) {
-                console.error("Role create error:", error);
-
-                return message.reply({
-                    content:
-                        "❌ I couldn't create that role.",
-                });
-            }
-        }
-
-        // ─────────────────────────────────────────────
-        // DELETE
-        // ─────────────────────────────────────────────
-
-        if (subcommand === "delete") {
-            const roleInput = args.join(" ").trim();
-
-            if (!roleInput) {
-                return message.reply({
-                    content:
-                        "❌ Usage: `.role delete @role`",
-                });
             }
 
-            const role = await findRole(message.guild, roleInput);
+            // ─────────────────────────────────────────
+            // DELETE
+            // ─────────────────────────────────────────
 
-            if (!role) {
-                return message.reply({
-                    content: `❌ I couldn't find the role **${roleInput}**.`,
-                });
-            }
+            if (subcommand === "delete") {
+                const roleInput = args
+                    .join(" ")
+                    .trim();
 
-            if (!canBotManageRole(botMember, role)) {
-                return message.reply({
-                    content:
-                        `❌ I cannot delete ${role.name}. Make sure my highest role is above it.`,
-                });
-            }
+                if (!roleInput) {
+                    return message.reply({
+                        content:
+                            "❌ Usage: `.role delete @role`",
+                    });
+                }
 
-            try {
-                const roleName = role.name;
+                const role = await findRole(
+                    message.guild,
+                    roleInput
+                );
+
+                if (!role) {
+                    return message.reply({
+                        content:
+                            `❌ I couldn't find the role **${roleInput}**.`,
+                    });
+                }
+
+                const check = canBotManageRole(
+                    botMember,
+                    role
+                );
+
+                if (!check.canManage) {
+                    return message.reply({
+                        content: check.message,
+                    });
+                }
+
+                const name = role.name;
 
                 await role.delete(
                     `Deleted by ${message.author.tag}`
@@ -486,58 +567,53 @@ export default {
                     embeds: [
                         successEmbed(
                             "Role Deleted",
-                            `Deleted the role **${roleName}**.`
+                            `Deleted the role **${name}**.`
                         ),
                     ],
                 });
-            } catch (error) {
-                console.error("Role delete error:", error);
-
-                return message.reply({
-                    content:
-                        "❌ I couldn't delete that role.",
-                });
-            }
-        }
-
-        // ─────────────────────────────────────────────
-        // RENAME
-        // ─────────────────────────────────────────────
-
-        if (subcommand === "rename") {
-            const roleInput = args[0];
-            const newName = args.slice(1).join(" ").trim();
-
-            if (!roleInput || !newName) {
-                return message.reply({
-                    content:
-                        "❌ Usage: `.role rename @role <new name>`",
-                });
             }
 
-            const role = await findRole(message.guild, roleInput);
+            // ─────────────────────────────────────────
+            // RENAME
+            // ─────────────────────────────────────────
 
-            if (!role) {
-                return message.reply({
-                    content: `❌ I couldn't find the role **${roleInput}**.`,
-                });
-            }
+            if (subcommand === "rename") {
+                const roleInput = args[0];
+                const newName = args
+                    .slice(1)
+                    .join(" ")
+                    .trim();
 
-            if (newName.length > 100) {
-                return message.reply({
-                    content:
-                        "❌ Role names cannot be longer than 100 characters.",
-                });
-            }
+                if (!roleInput || !newName) {
+                    return message.reply({
+                        content:
+                            "❌ Usage: `.role rename @role <new name>`",
+                    });
+                }
 
-            if (!canBotManageRole(botMember, role)) {
-                return message.reply({
-                    content:
-                        `❌ I cannot rename ${role.name}. Make sure my highest role is above it.`,
-                });
-            }
+                const role = await findRole(
+                    message.guild,
+                    roleInput
+                );
 
-            try {
+                if (!role) {
+                    return message.reply({
+                        content:
+                            `❌ I couldn't find the role **${roleInput}**.`,
+                    });
+                }
+
+                const check = canBotManageRole(
+                    botMember,
+                    role
+                );
+
+                if (!check.canManage) {
+                    return message.reply({
+                        content: check.message,
+                    });
+                }
+
                 const oldName = role.name;
 
                 await role.setName(
@@ -553,60 +629,59 @@ export default {
                         ),
                     ],
                 });
-            } catch (error) {
-                console.error("Role rename error:", error);
-
-                return message.reply({
-                    content:
-                        "❌ I couldn't rename that role.",
-                });
-            }
-        }
-
-        // ─────────────────────────────────────────────
-        // COLOR
-        // ─────────────────────────────────────────────
-
-        if (subcommand === "color") {
-            const roleInput = args[0];
-            const color = args[1];
-
-            if (!roleInput || !color) {
-                return message.reply({
-                    content:
-                        "❌ Usage: `.role color @role #5865F2`",
-                });
             }
 
-            const role = await findRole(message.guild, roleInput);
+            // ─────────────────────────────────────────
+            // COLOR
+            // ─────────────────────────────────────────
 
-            if (!role) {
-                return message.reply({
-                    content: `❌ I couldn't find the role **${roleInput}**.`,
-                });
-            }
+            if (subcommand === "color") {
+                const roleInput = args[0];
+                const color = args[1];
 
-            if (!/^#?[0-9A-F]{6}$/i.test(color)) {
-                return message.reply({
-                    content:
-                        "❌ Please provide a valid 6-digit hex color, such as `#5865F2`.",
-                });
-            }
+                if (!roleInput || !color) {
+                    return message.reply({
+                        content:
+                            "❌ Usage: `.role color @role #5865F2`",
+                    });
+                }
 
-            if (!canBotManageRole(botMember, role)) {
-                return message.reply({
-                    content:
-                        `❌ I cannot change the color of ${role.name}.`,
-                });
-            }
+                const role = await findRole(
+                    message.guild,
+                    roleInput
+                );
 
-            const normalizedColor = color.startsWith("#")
-                ? color
-                : `#${color}`;
+                if (!role) {
+                    return message.reply({
+                        content:
+                            `❌ I couldn't find the role **${roleInput}**.`,
+                    });
+                }
 
-            try {
+                if (!/^#?[0-9A-F]{6}$/i.test(color)) {
+                    return message.reply({
+                        content:
+                            "❌ Please provide a valid hex color.",
+                    });
+                }
+
+                const check = canBotManageRole(
+                    botMember,
+                    role
+                );
+
+                if (!check.canManage) {
+                    return message.reply({
+                        content: check.message,
+                    });
+                }
+
+                const hex = color.startsWith("#")
+                    ? color
+                    : `#${color}`;
+
                 await role.setColor(
-                    normalizedColor,
+                    hex,
                     `Color changed by ${message.author.tag}`
                 );
 
@@ -614,54 +689,55 @@ export default {
                     embeds: [
                         successEmbed(
                             "Role Color Changed",
-                            `Changed ${role}'s color to \`${normalizedColor}\`.`
+                            `Changed ${role}'s color to \`${hex}\`.`
                         ),
                     ],
                 });
-            } catch (error) {
-                console.error("Role color error:", error);
-
-                return message.reply({
-                    content:
-                        "❌ I couldn't change that role's color.",
-                });
-            }
-        }
-
-        // ─────────────────────────────────────────────
-        // HOIST
-        // ─────────────────────────────────────────────
-
-        if (subcommand === "hoist") {
-            const roleInput = args.join(" ").trim();
-
-            if (!roleInput) {
-                return message.reply({
-                    content:
-                        "❌ Usage: `.role hoist @role`",
-                });
             }
 
-            const role = await findRole(message.guild, roleInput);
+            // ─────────────────────────────────────────
+            // HOIST
+            // ─────────────────────────────────────────
 
-            if (!role) {
-                return message.reply({
-                    content: `❌ I couldn't find the role **${roleInput}**.`,
-                });
-            }
+            if (subcommand === "hoist") {
+                const roleInput = args
+                    .join(" ")
+                    .trim();
 
-            if (!canBotManageRole(botMember, role)) {
-                return message.reply({
-                    content:
-                        `❌ I cannot modify ${role.name}.`,
-                });
-            }
+                if (!roleInput) {
+                    return message.reply({
+                        content:
+                            "❌ Usage: `.role hoist @role`",
+                    });
+                }
 
-            try {
-                const newHoist = !role.hoist;
+                const role = await findRole(
+                    message.guild,
+                    roleInput
+                );
+
+                if (!role) {
+                    return message.reply({
+                        content:
+                            `❌ I couldn't find the role **${roleInput}**.`,
+                    });
+                }
+
+                const check = canBotManageRole(
+                    botMember,
+                    role
+                );
+
+                if (!check.canManage) {
+                    return message.reply({
+                        content: check.message,
+                    });
+                }
+
+                const newValue = !role.hoist;
 
                 await role.setHoist(
-                    newHoist,
+                    newValue,
                     `Hoist toggled by ${message.author.tag}`
                 );
 
@@ -670,57 +746,59 @@ export default {
                         successEmbed(
                             "Role Hoist Toggled",
                             `${role} is now **${
-                                newHoist
+                                newValue
                                     ? "hoisted"
                                     : "not hoisted"
                             }**.`
                         ),
                     ],
                 });
-            } catch (error) {
-                console.error("Role hoist error:", error);
-
-                return message.reply({
-                    content:
-                        "❌ I couldn't change that role's hoist setting.",
-                });
-            }
-        }
-
-        // ─────────────────────────────────────────────
-        // MENTIONABLE
-        // ─────────────────────────────────────────────
-
-        if (subcommand === "mentionable") {
-            const roleInput = args.join(" ").trim();
-
-            if (!roleInput) {
-                return message.reply({
-                    content:
-                        "❌ Usage: `.role mentionable @role`",
-                });
             }
 
-            const role = await findRole(message.guild, roleInput);
+            // ─────────────────────────────────────────
+            // MENTIONABLE
+            // ─────────────────────────────────────────
 
-            if (!role) {
-                return message.reply({
-                    content: `❌ I couldn't find the role **${roleInput}**.`,
-                });
-            }
+            if (subcommand === "mentionable") {
+                const roleInput = args
+                    .join(" ")
+                    .trim();
 
-            if (!canBotManageRole(botMember, role)) {
-                return message.reply({
-                    content:
-                        `❌ I cannot modify ${role.name}.`,
-                });
-            }
+                if (!roleInput) {
+                    return message.reply({
+                        content:
+                            "❌ Usage: `.role mentionable @role`",
+                    });
+                }
 
-            try {
-                const newMentionable = !role.mentionable;
+                const role = await findRole(
+                    message.guild,
+                    roleInput
+                );
+
+                if (!role) {
+                    return message.reply({
+                        content:
+                            `❌ I couldn't find the role **${roleInput}**.`,
+                    });
+                }
+
+                const check = canBotManageRole(
+                    botMember,
+                    role
+                );
+
+                if (!check.canManage) {
+                    return message.reply({
+                        content: check.message,
+                    });
+                }
+
+                const newValue =
+                    !role.mentionable;
 
                 await role.setMentionable(
-                    newMentionable,
+                    newValue,
                     `Mentionable toggled by ${message.author.tag}`
                 );
 
@@ -729,52 +807,54 @@ export default {
                         successEmbed(
                             "Role Mentionability Toggled",
                             `${role} is now **${
-                                newMentionable
+                                newValue
                                     ? "mentionable"
                                     : "not mentionable"
                             }**.`
                         ),
                     ],
                 });
-            } catch (error) {
-                console.error("Role mentionable error:", error);
+            }
 
+            return message.reply({
+                content:
+                    `❌ Unknown role subcommand **${subcommand}**.\nUse \`.role help\`.`,
+            });
+        } catch (error) {
+            console.error("[ROLE COMMAND ERROR]", error);
+
+            try {
                 return message.reply({
                     content:
-                        "❌ I couldn't change that role's mentionability.",
+                        `❌ An error occurred while running the role command.\n\`${error.message || "Unknown error"}\``,
                 });
+            } catch {
+                return;
             }
         }
-
-        return message.reply({
-            content:
-                `❌ Unknown role subcommand **${subcommand}**.\nUse \`.role help\` to see the available commands.`,
-        });
     },
 };
 
 // ═════════════════════════════════════════════════════
-// HELPERS
+// MEMBER RESOLVER
 // ═════════════════════════════════════════════════════
 
-async function resolveMember(message, input) {
+async function resolveMember(guild, input) {
     if (!input) return null;
 
-    // Mention
     const mention = input.match(/^<@!?(\d+)>$/);
 
     if (mention) {
         try {
-            return await message.guild.members.fetch(mention[1]);
+            return await guild.members.fetch(mention[1]);
         } catch {
             return null;
         }
     }
 
-    // User ID
     if (/^\d{17,20}$/.test(input)) {
         try {
-            return await message.guild.members.fetch(input);
+            return await guild.members.fetch(input);
         } catch {
             return null;
         }
@@ -783,101 +863,129 @@ async function resolveMember(message, input) {
     const lower = input.toLowerCase();
 
     return (
-        message.guild.members.cache.find(
+        guild.members.cache.find(
             (member) =>
                 member.user.username.toLowerCase() === lower ||
-                member.user.tag?.toLowerCase() === lower ||
-                member.displayName.toLowerCase() === lower
+                member.displayName.toLowerCase() === lower ||
+                member.user.tag?.toLowerCase() === lower
         ) || null
     );
 }
 
-/**
- * Always returns:
- *   Role | null
- *
- * Never returns a Promise as the role value.
- */
+// ═════════════════════════════════════════════════════
+// ROLE RESOLVER
+// ═════════════════════════════════════════════════════
+
 async function findRole(guild, input) {
     if (!input) return null;
 
-    const cleaned = input.trim();
+    const value = input.trim();
 
-    // Role mention
-    const roleMention = cleaned.match(/^<@&(\d+)>$/);
+    // @Role mention
+    const mention = value.match(/^<@&(\d+)>$/);
 
-    if (roleMention) {
+    if (mention) {
         try {
-            const role = await guild.roles.fetch(roleMention[1]);
-            return role || null;
+            return await guild.roles.fetch(mention[1]);
         } catch {
             return null;
         }
     }
 
     // Role ID
-    if (/^\d{17,20}$/.test(cleaned)) {
+    if (/^\d{17,20}$/.test(value)) {
         try {
-            const role = await guild.roles.fetch(cleaned);
-            return role || null;
+            return await guild.roles.fetch(value);
         } catch {
             return null;
         }
     }
 
-    const lower = cleaned.toLowerCase();
+    const lower = value.toLowerCase();
 
-    // Search cache first
-    const cachedRole = guild.roles.cache.find(
-        (role) => role.name.toLowerCase() === lower
+    // Cache
+    let role = guild.roles.cache.find(
+        (r) => r.name.toLowerCase() === lower
     );
 
-    if (cachedRole) {
-        return cachedRole;
-    }
+    if (role) return role;
 
-    // Fetch all roles and explicitly await it
+    // API
     try {
-        const fetchedRoles = await guild.roles.fetch();
+        const roles = await guild.roles.fetch();
 
-        const role = fetchedRoles.find(
+        role = roles.find(
             (r) => r.name.toLowerCase() === lower
         );
 
         return role || null;
     } catch (error) {
-        console.error("findRole error:", error);
+        console.error("[ROLE LOOKUP ERROR]", error);
         return null;
     }
 }
 
-/**
- * Checks whether the bot can actually manage a role.
- */
+// ═════════════════════════════════════════════════════
+// ROLE HIERARCHY CHECK
+// ═════════════════════════════════════════════════════
+
 function canBotManageRole(botMember, role) {
-    if (!botMember || !role) {
-        return false;
+    if (!role) {
+        return {
+            canManage: false,
+            message: "❌ That role doesn't exist.",
+        };
     }
 
-    // Never manage Discord-managed roles.
     if (role.managed) {
-        return false;
+        return {
+            canManage: false,
+            message:
+                "❌ That role is managed by an integration and cannot be manually managed.",
+        };
     }
 
-    // Never manage @everyone.
     if (role.id === botMember.guild.id) {
-        return false;
+        return {
+            canManage: false,
+            message:
+                "❌ The @everyone role cannot be managed.",
+        };
     }
 
-    const botHighestRole = botMember.roles.highest;
+    const highest = botMember.roles.highest;
 
-    if (!botHighestRole) {
-        return false;
+    if (!highest) {
+        return {
+            canManage: false,
+            message:
+                "❌ I couldn't determine my highest role.",
+        };
     }
 
-    // Bot's highest role must be ABOVE the target role.
-    return botHighestRole.position > role.position;
+    console.log(
+        `[ROLE HIERARCHY] Bot: ${highest.name} (${highest.position}) | Target: ${role.name} (${role.position})`
+    );
+
+    if (highest.position <= role.position) {
+        return {
+            canManage: false,
+            message:
+                `❌ I cannot manage **${role.name}**.\n\n` +
+                `My highest role: **${highest.name}** (position ${highest.position})\n` +
+                `Target role: **${role.name}** (position ${role.position})\n\n` +
+                `Move my bot role **above** the target role in Server Settings → Roles.`,
+        };
+    }
+
+    return {
+        canManage: true,
+    };
 }
+
+// ═════════════════════════════════════════════════════
+// EMBED
+// ═════════════════════════════════════════════════════
 
 function successEmbed(title, description) {
     return new EmbedBuilder()
@@ -886,45 +994,46 @@ function successEmbed(title, description) {
         .setDescription(description);
 }
 
-async function sendHelp(message) {
-    const embed = new EmbedBuilder()
-        .setColor(0x5865f2)
-        .setTitle("Role Commands")
-        .setDescription(
-            "Manage server roles using the commands below."
-        )
-        .addFields(
-            {
-                name: "Member Roles",
-                value:
-                    "`.role add @user @role`\n" +
-                    "`.role remove @user @role`\n" +
-                    "`.role toggle @user @role`\n" +
-                    "`.role has @user @role`",
-            },
-            {
-                name: "Role Management",
-                value:
-                    "`.role create <name>`\n" +
-                    "`.role delete @role`\n" +
-                    "`.role rename @role <new name>`\n" +
-                    "`.role color @role #5865F2`\n" +
-                    "`.role hoist @role`\n" +
-                    "`.role mentionable @role`",
-            },
-            {
-                name: "Role Information",
-                value:
-                    "`.role info @role`\n" +
-                    "`.role list`",
-            }
-        )
-        .setFooter({
-            text:
-                "You need the Manage Roles permission to use these commands.",
-        });
+// ═════════════════════════════════════════════════════
+// HELP
+// ═════════════════════════════════════════════════════
 
+async function sendHelp(message) {
     return message.reply({
-        embeds: [embed],
+        embeds: [
+            new EmbedBuilder()
+                .setColor(0x5865f2)
+                .setTitle("Role Commands")
+                .setDescription(
+                    "Manage server roles using the commands below."
+                )
+                .addFields(
+                    {
+                        name: "Member Roles",
+                        value:
+                            "`.role add @user @role`\n" +
+                            "`.role remove @user @role`\n" +
+                            "`.role toggle @user @role`\n" +
+                            "`.role has @user @role`",
+                    },
+                    {
+                        name: "Role Management",
+                        value:
+                            "`.role create <name>`\n" +
+                            "`.role delete @role`\n" +
+                            "`.role rename @role <new name>`\n" +
+                            "`.role color @role #5865F2`\n" +
+                            "`.role hoist @role`\n" +
+                            "`.role mentionable @role`",
+                    },
+                    {
+                        name: "Information",
+                        value:
+                            "`.role info @role`\n" +
+                            "`.role list`\n" +
+                            "`.role help`",
+                    }
+                ),
+        ],
     });
 }
