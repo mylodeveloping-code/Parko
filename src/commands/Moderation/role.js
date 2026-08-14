@@ -13,18 +13,17 @@ export default {
 
         const subcommand = args.shift()?.toLowerCase();
 
-        if (!subcommand) {
+        if (!subcommand || subcommand === "help") {
             return sendHelp(message);
         }
 
         // ─────────────────────────────────────────────
-        // Permissions
+        // PERMISSIONS
         // ─────────────────────────────────────────────
 
         if (!message.member.permissions.has(PermissionFlagsBits.ManageRoles)) {
             return message.reply({
-                content:
-                    "❌ You need the **Manage Roles** permission to use this command.",
+                content: "❌ You need the **Manage Roles** permission to use this command.",
             });
         }
 
@@ -32,8 +31,7 @@ export default {
 
         if (!botMember.permissions.has(PermissionFlagsBits.ManageRoles)) {
             return message.reply({
-                content:
-                    "❌ I don't have the **Manage Roles** permission.",
+                content: "❌ I don't have the **Manage Roles** permission.",
             });
         }
 
@@ -52,7 +50,7 @@ export default {
                 });
             }
 
-            const roleInput = args.slice(1).join(" ");
+            const roleInput = args.slice(1).join(" ").trim();
 
             if (!roleInput) {
                 return message.reply({
@@ -65,22 +63,20 @@ export default {
 
             if (!role) {
                 return message.reply({
-                    content:
-                        `❌ I couldn't find the role **${roleInput}**.`,
+                    content: `❌ I couldn't find the role **${roleInput}**.`,
                 });
             }
 
             if (!canBotManageRole(botMember, role)) {
                 return message.reply({
                     content:
-                        `❌ I cannot manage ${role}. Make sure my highest role is above it.`,
+                        `❌ I cannot manage ${role.name}. Make sure my highest role is above it.`,
                 });
             }
 
             if (target.roles.cache.has(role.id)) {
                 return message.reply({
-                    content:
-                        `⚠️ ${target} already has ${role}.`,
+                    content: `⚠️ ${target} already has ${role}.`,
                 });
             }
 
@@ -99,18 +95,17 @@ export default {
                     ],
                 });
             } catch (error) {
-                console.error(error);
+                console.error("Role add error:", error);
 
                 return message.reply({
                     content:
-                        "❌ I couldn't add that role to the user.",
+                        "❌ I couldn't add that role to the user. Make sure the role is below my highest role.",
                 });
             }
         }
 
         // ─────────────────────────────────────────────
         // REMOVE
-        // .role remove @user @role
         // ─────────────────────────────────────────────
 
         if (subcommand === "remove") {
@@ -123,7 +118,7 @@ export default {
                 });
             }
 
-            const roleInput = args.slice(1).join(" ");
+            const roleInput = args.slice(1).join(" ").trim();
 
             if (!roleInput) {
                 return message.reply({
@@ -136,22 +131,20 @@ export default {
 
             if (!role) {
                 return message.reply({
-                    content:
-                        `❌ I couldn't find the role **${roleInput}**.`,
+                    content: `❌ I couldn't find the role **${roleInput}**.`,
                 });
             }
 
             if (!canBotManageRole(botMember, role)) {
                 return message.reply({
                     content:
-                        `❌ I cannot manage ${role}. Make sure my highest role is above it.`,
+                        `❌ I cannot manage ${role.name}. Make sure my highest role is above it.`,
                 });
             }
 
             if (!target.roles.cache.has(role.id)) {
                 return message.reply({
-                    content:
-                        `⚠️ ${target} doesn't have ${role}.`,
+                    content: `⚠️ ${target} doesn't have ${role}.`,
                 });
             }
 
@@ -170,7 +163,7 @@ export default {
                     ],
                 });
             } catch (error) {
-                console.error(error);
+                console.error("Role remove error:", error);
 
                 return message.reply({
                     content:
@@ -181,7 +174,6 @@ export default {
 
         // ─────────────────────────────────────────────
         // TOGGLE
-        // .role toggle @user @role
         // ─────────────────────────────────────────────
 
         if (subcommand === "toggle") {
@@ -194,7 +186,7 @@ export default {
                 });
             }
 
-            const roleInput = args.slice(1).join(" ");
+            const roleInput = args.slice(1).join(" ").trim();
 
             if (!roleInput) {
                 return message.reply({
@@ -207,15 +199,14 @@ export default {
 
             if (!role) {
                 return message.reply({
-                    content:
-                        `❌ I couldn't find the role **${roleInput}**.`,
+                    content: `❌ I couldn't find the role **${roleInput}**.`,
                 });
             }
 
             if (!canBotManageRole(botMember, role)) {
                 return message.reply({
                     content:
-                        `❌ I cannot manage ${role}. Make sure my highest role is above it.`,
+                        `❌ I cannot manage ${role.name}. Make sure my highest role is above it.`,
                 });
             }
 
@@ -250,7 +241,7 @@ export default {
                     ],
                 });
             } catch (error) {
-                console.error(error);
+                console.error("Role toggle error:", error);
 
                 return message.reply({
                     content:
@@ -261,12 +252,11 @@ export default {
 
         // ─────────────────────────────────────────────
         // HAS
-        // .role has @user @role
         // ─────────────────────────────────────────────
 
         if (subcommand === "has") {
             const target = await resolveMember(message, args[0]);
-            const roleInput = args.slice(1).join(" ");
+            const roleInput = args.slice(1).join(" ").trim();
 
             if (!target || !roleInput) {
                 return message.reply({
@@ -279,8 +269,7 @@ export default {
 
             if (!role) {
                 return message.reply({
-                    content:
-                        `❌ I couldn't find the role **${roleInput}**.`,
+                    content: `❌ I couldn't find the role **${roleInput}**.`,
                 });
             }
 
@@ -305,7 +294,7 @@ export default {
         // ─────────────────────────────────────────────
 
         if (subcommand === "info") {
-            const roleInput = args.join(" ");
+            const roleInput = args.join(" ").trim();
 
             if (!roleInput) {
                 return message.reply({
@@ -318,8 +307,7 @@ export default {
 
             if (!role) {
                 return message.reply({
-                    content:
-                        `❌ I couldn't find the role **${roleInput}**.`,
+                    content: `❌ I couldn't find the role **${roleInput}**.`,
                 });
             }
 
@@ -422,13 +410,12 @@ export default {
                 });
             }
 
-            if (
-                message.guild.roles.cache.some(
-                    (role) =>
-                        role.name.toLowerCase() ===
-                        name.toLowerCase()
-                )
-            ) {
+            const existingRole = message.guild.roles.cache.find(
+                (role) =>
+                    role.name.toLowerCase() === name.toLowerCase()
+            );
+
+            if (existingRole) {
                 return message.reply({
                     content:
                         `❌ A role named **${name}** already exists.`,
@@ -450,7 +437,7 @@ export default {
                     ],
                 });
             } catch (error) {
-                console.error(error);
+                console.error("Role create error:", error);
 
                 return message.reply({
                     content:
@@ -464,7 +451,7 @@ export default {
         // ─────────────────────────────────────────────
 
         if (subcommand === "delete") {
-            const roleInput = args.join(" ");
+            const roleInput = args.join(" ").trim();
 
             if (!roleInput) {
                 return message.reply({
@@ -477,15 +464,14 @@ export default {
 
             if (!role) {
                 return message.reply({
-                    content:
-                        `❌ I couldn't find the role **${roleInput}**.`,
+                    content: `❌ I couldn't find the role **${roleInput}**.`,
                 });
             }
 
             if (!canBotManageRole(botMember, role)) {
                 return message.reply({
                     content:
-                        `❌ I cannot delete ${role}. Make sure my highest role is above it.`,
+                        `❌ I cannot delete ${role.name}. Make sure my highest role is above it.`,
                 });
             }
 
@@ -505,7 +491,7 @@ export default {
                     ],
                 });
             } catch (error) {
-                console.error(error);
+                console.error("Role delete error:", error);
 
                 return message.reply({
                     content:
@@ -533,8 +519,7 @@ export default {
 
             if (!role) {
                 return message.reply({
-                    content:
-                        `❌ I couldn't find the role **${roleInput}**.`,
+                    content: `❌ I couldn't find the role **${roleInput}**.`,
                 });
             }
 
@@ -548,7 +533,7 @@ export default {
             if (!canBotManageRole(botMember, role)) {
                 return message.reply({
                     content:
-                        `❌ I cannot rename ${role}. Make sure my highest role is above it.`,
+                        `❌ I cannot rename ${role.name}. Make sure my highest role is above it.`,
                 });
             }
 
@@ -569,7 +554,7 @@ export default {
                     ],
                 });
             } catch (error) {
-                console.error(error);
+                console.error("Role rename error:", error);
 
                 return message.reply({
                     content:
@@ -597,8 +582,7 @@ export default {
 
             if (!role) {
                 return message.reply({
-                    content:
-                        `❌ I couldn't find the role **${roleInput}**.`,
+                    content: `❌ I couldn't find the role **${roleInput}**.`,
                 });
             }
 
@@ -612,7 +596,7 @@ export default {
             if (!canBotManageRole(botMember, role)) {
                 return message.reply({
                     content:
-                        `❌ I cannot change the color of ${role}.`,
+                        `❌ I cannot change the color of ${role.name}.`,
                 });
             }
 
@@ -635,7 +619,7 @@ export default {
                     ],
                 });
             } catch (error) {
-                console.error(error);
+                console.error("Role color error:", error);
 
                 return message.reply({
                     content:
@@ -649,7 +633,7 @@ export default {
         // ─────────────────────────────────────────────
 
         if (subcommand === "hoist") {
-            const roleInput = args.join(" ");
+            const roleInput = args.join(" ").trim();
 
             if (!roleInput) {
                 return message.reply({
@@ -662,21 +646,22 @@ export default {
 
             if (!role) {
                 return message.reply({
-                    content:
-                        `❌ I couldn't find the role **${roleInput}**.`,
+                    content: `❌ I couldn't find the role **${roleInput}**.`,
                 });
             }
 
             if (!canBotManageRole(botMember, role)) {
                 return message.reply({
                     content:
-                        `❌ I cannot modify ${role}.`,
+                        `❌ I cannot modify ${role.name}.`,
                 });
             }
 
             try {
+                const newHoist = !role.hoist;
+
                 await role.setHoist(
-                    !role.hoist,
+                    newHoist,
                     `Hoist toggled by ${message.author.tag}`
                 );
 
@@ -685,7 +670,7 @@ export default {
                         successEmbed(
                             "Role Hoist Toggled",
                             `${role} is now **${
-                                role.hoist
+                                newHoist
                                     ? "hoisted"
                                     : "not hoisted"
                             }**.`
@@ -693,7 +678,7 @@ export default {
                     ],
                 });
             } catch (error) {
-                console.error(error);
+                console.error("Role hoist error:", error);
 
                 return message.reply({
                     content:
@@ -707,7 +692,7 @@ export default {
         // ─────────────────────────────────────────────
 
         if (subcommand === "mentionable") {
-            const roleInput = args.join(" ");
+            const roleInput = args.join(" ").trim();
 
             if (!roleInput) {
                 return message.reply({
@@ -720,21 +705,22 @@ export default {
 
             if (!role) {
                 return message.reply({
-                    content:
-                        `❌ I couldn't find the role **${roleInput}**.`,
+                    content: `❌ I couldn't find the role **${roleInput}**.`,
                 });
             }
 
             if (!canBotManageRole(botMember, role)) {
                 return message.reply({
                     content:
-                        `❌ I cannot modify ${role}.`,
+                        `❌ I cannot modify ${role.name}.`,
                 });
             }
 
             try {
+                const newMentionable = !role.mentionable;
+
                 await role.setMentionable(
-                    !role.mentionable,
+                    newMentionable,
                     `Mentionable toggled by ${message.author.tag}`
                 );
 
@@ -743,7 +729,7 @@ export default {
                         successEmbed(
                             "Role Mentionability Toggled",
                             `${role} is now **${
-                                role.mentionable
+                                newMentionable
                                     ? "mentionable"
                                     : "not mentionable"
                             }**.`
@@ -751,7 +737,7 @@ export default {
                     ],
                 });
             } catch (error) {
-                console.error(error);
+                console.error("Role mentionable error:", error);
 
                 return message.reply({
                     content:
@@ -774,18 +760,24 @@ export default {
 async function resolveMember(message, input) {
     if (!input) return null;
 
+    // Mention
     const mention = input.match(/^<@!?(\d+)>$/);
 
     if (mention) {
-        return message.guild.members
-            .fetch(mention[1])
-            .catch(() => null);
+        try {
+            return await message.guild.members.fetch(mention[1]);
+        } catch {
+            return null;
+        }
     }
 
+    // User ID
     if (/^\d{17,20}$/.test(input)) {
-        return message.guild.members
-            .fetch(input)
-            .catch(() => null);
+        try {
+            return await message.guild.members.fetch(input);
+        } catch {
+            return null;
+        }
     }
 
     const lower = input.toLowerCase();
@@ -800,22 +792,42 @@ async function resolveMember(message, input) {
     );
 }
 
-// IMPORTANT: this returns a real Role, never a Promise
+/**
+ * Always returns:
+ *   Role | null
+ *
+ * Never returns a Promise as the role value.
+ */
 async function findRole(guild, input) {
     if (!input) return null;
 
-    const roleMention = input.match(/^<@&(\d+)>$/);
+    const cleaned = input.trim();
+
+    // Role mention
+    const roleMention = cleaned.match(/^<@&(\d+)>$/);
 
     if (roleMention) {
-        return guild.roles.fetch(roleMention[1]).catch(() => null);
+        try {
+            const role = await guild.roles.fetch(roleMention[1]);
+            return role || null;
+        } catch {
+            return null;
+        }
     }
 
-    if (/^\d{17,20}$/.test(input)) {
-        return guild.roles.fetch(input).catch(() => null);
+    // Role ID
+    if (/^\d{17,20}$/.test(cleaned)) {
+        try {
+            const role = await guild.roles.fetch(cleaned);
+            return role || null;
+        } catch {
+            return null;
+        }
     }
 
-    const lower = input.toLowerCase();
+    const lower = cleaned.toLowerCase();
 
+    // Search cache first
     const cachedRole = guild.roles.cache.find(
         (role) => role.name.toLowerCase() === lower
     );
@@ -824,27 +836,47 @@ async function findRole(guild, input) {
         return cachedRole;
     }
 
-    const roles = await guild.roles.fetch();
+    // Fetch all roles and explicitly await it
+    try {
+        const fetchedRoles = await guild.roles.fetch();
 
-    return (
-        roles.find(
-            (role) => role.name.toLowerCase() === lower
-        ) || null
-    );
+        const role = fetchedRoles.find(
+            (r) => r.name.toLowerCase() === lower
+        );
+
+        return role || null;
+    } catch (error) {
+        console.error("findRole error:", error);
+        return null;
+    }
 }
 
-// Make absolutely sure the bot is above the target role.
+/**
+ * Checks whether the bot can actually manage a role.
+ */
 function canBotManageRole(botMember, role) {
-    if (!role) return false;
+    if (!botMember || !role) {
+        return false;
+    }
 
-    // Discord-managed roles cannot be manually managed.
-    if (role.managed) return false;
+    // Never manage Discord-managed roles.
+    if (role.managed) {
+        return false;
+    }
 
-    // @everyone cannot be managed.
-    if (role.id === botMember.guild.id) return false;
+    // Never manage @everyone.
+    if (role.id === botMember.guild.id) {
+        return false;
+    }
 
-    // The bot's highest role MUST be higher than the target role.
-    return botMember.roles.highest.comparePositionTo(role) > 0;
+    const botHighestRole = botMember.roles.highest;
+
+    if (!botHighestRole) {
+        return false;
+    }
+
+    // Bot's highest role must be ABOVE the target role.
+    return botHighestRole.position > role.position;
 }
 
 function successEmbed(title, description) {
