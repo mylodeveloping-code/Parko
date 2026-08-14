@@ -3,9 +3,12 @@
 import { logEvent as logAuditEvent, EVENT_TYPES } from '../services/loggingService.js';
 import { formatLogLine } from './logging/logEmbeds.js';
 import { logger } from './logger.js';
-import { getFromDb, setInDb } from './database.js';
+import { getFromDb, setInDb, deleteFromDb } from './database.js';
 
-// Users who are exempt from all moderation actions.
+// ============================================================
+// MODERATION EXEMPTIONS
+// ============================================================
+
 const MODERATION_EXEMPT_IDS = new Set([
   '1171948174190067737', // You
   '1423028927881805874', // Owner
@@ -15,6 +18,265 @@ const MODERATION_EXEMPT_IDS = new Set([
 export function isModerationExempt(userId) {
   return MODERATION_EXEMPT_IDS.has(String(userId));
 }
+
+// ============================================================
+// MUTE / TIMEOUT ROLE CONFIGURATION
+// ============================================================
+
+export const MUTED_ROLE_ID = '1537615321438093425';
+
+/**
+ * Save the roles a user had before being timed out.
+ *
+ * This is stored in the database so the roles survive
+ * bot restarts.
+ */
+export async function saveTimeoutRoles({
+  guildId,
+  userId,
+  roleIds,
+  expiresAt = null,
+}) {
+  try {
+    const key = `moderation_timeout_roles_${guildId}_${userId}`;
+
+    const data = {
+      guildId,
+      userId,
+      roleIds: Array.isArray(roleIds) ? roleIds : [],
+      mutedRoleId: MUTED_ROLE_ID,
+      expiresAt,
+      savedAt: new Date().toISOString(),
+    };
+
+    await setInDb(key, data);
+
+    logger.debug(
+      `Saved timeout roles for ${userId} in guild ${guildId}: ${data.roleIds.join(', ')}`
+    );
+
+    return true;
+  } catch (error) {
+    logger.error(
+      `Error saving timeout roles for ${userId} in guild ${guildId}:`,
+      error
+    );
+
+    return false;
+  }
+}
+
+/**
+ * Get the roles a user had before being timed out.
+ */
+export async function getTimeoutRoles(guildId, userId) {
+  try {
+    const key = `moderation_timeout_roles_${guildId}_${userId}`;
+
+    const data = await getFromDb(key, null);
+
+    if (!data || !Array.isArray(data.roleIds)) {
+      return null;
+    }
+
+    return data;
+  } catch (error) {
+    logger.error(
+      `Error getting timeout roles for ${userId} in guild ${guildId}:`,
+      error
+    );
+
+    return null;
+  }
+}
+
+/**
+ * Delete the saved timeout-role information after
+ * the user's original roles have been restored.
+ */
+export async function deleteTimeoutRoles(guildId, userId) {
+  try {
+    const key = `moderation_timeout_roles_${guildId}_${userId}`;
+
+    await deleteFromDb(key);
+
+    logger.debug(
+      `Deleted saved timeout roles for ${userId} in guild ${guildId}`
+    );
+
+    return true;
+  } catch (error) {
+    logger.error(
+      `Error deleting timeout roles for ${userId} in guild ${guildId}:`,
+      error
+    );
+
+    return false;
+  }
+}
+
+/**
+ * Get all normal roles a member currently has.
+ *
+ * @param {import('discord.js').GuildMember} member
+ */
+export function getMemberRoleIds(member) {
+  if (!member?.roles?.cache) {
+    return [];
+  }
+
+  return member.roles.cache
+    .filter(role => role.id !== member.guild.id) // @everyone
+    .map(role => role.id);
+}
+
+/**
+ * Remove all removable roles from a member and give them
+ * the Muted role.
+ *
+ * The user's previous roles MUST be saved first.
+ */
+export async function applyMutedRole(member) {
+  if (!member) {
+    return false;
+  }
+
+  const mutedRole = member.guild.roles.cache.get(MUTED_ROLE_ID);
+
+  if (!mutedRole) {
+    logger.error(
+      `Muted role ${MUTED_ROLE_ID} was not found in guild ${member.guild.id}`
+    );
+
+    return false;
+  }
+
+  if (!mutedRole.editable) {
+    logger.error(
+      `Muted role ${MUTED_ROLE_ID} is not editable in guild ${member.guild.id}`
+    );
+
+    return false;
+  }
+
+  try {
+    // Remove every role except @everyone and the Muted role.
+    const rolesToRemove = member.roles.cache.filter(
+      role =>
+        role.id !== member.guild.id &&
+        role.id !== MUTED_ROLE_ID &&
+        !role.managed
+    );
+
+    if (rolesToRemove.size > 0) {
+      await member.roles.remove(
+        rolesToRemove,
+        'Applying Muted role'
+      );
+    }
+
+    // Give Muted role if they don't already have it.
+    if (!member.roles.cache.has(MUTED_ROLE_ID)) {
+      await member.roles.add(
+        mutedRole,
+        'Applying Muted role'
+      );
+    }
+
+    return true;
+  } catch (error) {
+    logger.error(
+      `Error applying Muted role to ${member.user?.tag ?? member.id}:`,
+      error
+    );
+
+    return false;
+  }
+}
+
+/**
+ * Restore the user's exact roles from before the timeout.
+ *
+ * Roles that no longer exist are simply skipped.
+ */
+export async function restoreTimeoutRoles(member) {
+  if (!member) {
+    return false;
+  }
+
+  try {
+    const saved = await getTimeoutRoles(
+      member.guild.id,
+      member.id
+    );
+
+    if (!saved) {
+      logger.debug(
+        `No saved timeout roles found for ${member.id} in guild ${member.guild.id}`
+      );
+
+      // Still remove Muted if present.
+      if (member.roles.cache.has(MUTED_ROLE_ID)) {
+        await member.roles.remove(
+          MUTED_ROLE_ID,
+          'Restoring roles after timeout'
+        );
+      }
+
+      return false;
+    }
+
+    const rolesToRestore = saved.roleIds.filter(roleId => {
+      const role = member.guild.roles.cache.get(roleId);
+
+      return (
+        role &&
+        !role.managed &&
+        role.id !== member.guild.id &&
+        role.id !== MUTED_ROLE_ID
+      );
+    });
+
+    // Remove Muted first.
+    if (member.roles.cache.has(MUTED_ROLE_ID)) {
+      await member.roles.remove(
+        MUTED_ROLE_ID,
+        'Restoring roles after timeout'
+      );
+    }
+
+    // Restore the exact roles the user had before.
+    if (rolesToRestore.length > 0) {
+      await member.roles.add(
+        rolesToRestore,
+        'Restoring roles after timeout'
+      );
+    }
+
+    // Delete the saved role data so it isn't reused later.
+    await deleteTimeoutRoles(
+      member.guild.id,
+      member.id
+    );
+
+    logger.info(
+      `Restored ${rolesToRestore.length} roles for ${member.user?.tag ?? member.id} in ${member.guild.name}`
+    );
+
+    return true;
+  } catch (error) {
+    logger.error(
+      `Error restoring timeout roles for ${member.user?.tag ?? member.id}:`,
+      error
+    );
+
+    return false;
+  }
+}
+
+// ============================================================
+// MODERATION LOGGING
+// ============================================================
 
 const ACTION_TO_EVENT_TYPE = {
   'Member Banned': EVENT_TYPES.MODERATION_BAN,
@@ -154,6 +416,10 @@ export async function logEvent({
     );
   }
 }
+
+// ============================================================
+// CASE MANAGEMENT
+// ============================================================
 
 export async function generateCaseId(client, guildId) {
   try {
