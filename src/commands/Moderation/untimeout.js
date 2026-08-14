@@ -36,38 +36,45 @@ export default {
             return;
         }
 
-        const targetUser =
-            interaction.options.getUser('target');
-
-        const member =
-            interaction.options.getMember('target');
-
-        if (!targetUser) {
-            throw new TitanBotError(
-                'Missing target user',
-                ErrorTypes.USER_INPUT,
-                'You must specify a user to untimeout.',
-                {
-                    subtype: 'invalid_user',
-                }
-            );
-        }
-
-        if (!member) {
-            throw new TitanBotError(
-                'Target not found',
-                ErrorTypes.USER_INPUT,
-                'The target user is not currently in this server.'
-            );
-        }
-
         try {
+            const targetUser =
+                interaction.options.getUser('target');
+
+            const member =
+                interaction.options.getMember('target');
+
+            if (!targetUser) {
+                throw new TitanBotError(
+                    'Missing target user',
+                    ErrorTypes.USER_INPUT,
+                    'You must specify a user to untimeout.',
+                    {
+                        subtype: 'invalid_user',
+                    }
+                );
+            }
+
+            if (!member) {
+                throw new TitanBotError(
+                    'Target not found',
+                    ErrorTypes.USER_INPUT,
+                    'The target user is not currently in this server.'
+                );
+            }
+
             /*
-             * Check whether the user is actually timed out.
+             * Check the actual Discord timeout state.
+             *
+             * communicationDisabledUntilTimestamp is null
+             * when the member is not timed out.
              */
+            const timeoutUntil =
+                member.communicationDisabledUntilTimestamp;
+
             const currentlyTimedOut =
-                member.communicationDisabledUntilTimestamp &&
-                member.communicationDisabledUntilTimestamp > Date.now();
+                timeoutUntil !== null &&
+                timeoutUntil !== undefined &&
+                timeoutUntil > Date.now();
 
             if (!currentlyTimedOut) {
                 await InteractionHelper.safeEditReply(
@@ -94,13 +101,26 @@ export default {
             });
 
             /*
-             * Tell the anti-spam system that this timeout
-             * was manually removed.
+             * IMPORTANT:
+             * Tell the anti-spam system that this timeout was
+             * manually removed so it does not immediately
+             * restore the timeout from stale anti-spam state.
              */
-            markSpamTimeoutManuallyRemoved(
-                interaction.guild.id,
-                targetUser.id
-            );
+            try {
+                markSpamTimeoutManuallyRemoved(
+                    interaction.guild.id,
+                    targetUser.id
+                );
+            } catch (spamError) {
+                /*
+                 * Do not undo a successful untimeout just because
+                 * the anti-spam state update failed.
+                 */
+                logger.error(
+                    `Failed to update anti-spam timeout state for ${targetUser.tag} (${targetUser.id}):`,
+                    spamError
+                );
+            }
 
             logger.info(
                 `User ${targetUser.tag} (${targetUser.id}) was manually untimeouted by ${interaction.user.tag} (${interaction.user.id}).`
@@ -118,7 +138,7 @@ export default {
             );
         } catch (error) {
             logger.error(
-                `Failed to untimeout ${targetUser.tag}:`,
+                `Failed to untimeout user:`,
                 error
             );
 
