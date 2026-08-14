@@ -11,14 +11,20 @@ import {
     warningEmbed,
 } from '../../utils/embeds.js';
 
-import { logModerationAction } from '../../utils/moderation.js';
+import {
+    logModerationAction,
+    isModerationExempt,
+} from '../../utils/moderation.js';
+
 import { logger } from '../../utils/logger.js';
 import { WarningService } from '../../services/moderation/warningService.js';
 import { ModerationService } from '../../services/moderation/moderationService.js';
+
 import {
     TitanBotError,
     ErrorTypes,
 } from '../../utils/errorHandler.js';
+
 import { InteractionHelper } from '../../utils/interactionHelper.js';
 
 // Warning role IDs
@@ -72,6 +78,15 @@ export default {
                 ErrorTypes.USER_INPUT,
                 'You must specify a user to warn.',
                 { subtype: 'invalid_user' },
+            );
+        }
+
+        // Moderation exemption
+        if (isModerationExempt(target.id)) {
+            throw new TitanBotError(
+                "User is moderation exempt",
+                ErrorTypes.VALIDATION,
+                "This user is exempt from all moderation actions.",
             );
         }
 
