@@ -1,4 +1,4 @@
-```javascript
+javascript
 import { Events } from 'discord.js';
 import { logger } from '../utils/logger.js';
 import {
@@ -1833,4 +1833,3 @@ async function handleLeveling(
         );
     }
 }
-```
