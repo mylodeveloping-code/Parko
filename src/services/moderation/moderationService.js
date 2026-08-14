@@ -37,7 +37,14 @@ async function loadTimeoutRoles() {
         }
 
         return parsed;
-    } catch {
+    } catch (error) {
+        if (error?.code !== 'ENOENT') {
+            logger.error(
+                'Failed to load timeout role data:',
+                error
+            );
+        }
+
         return {};
     }
 }
@@ -71,6 +78,10 @@ function getTargetLabel(target) {
 
 function getHighestRole(member) {
     return member?.roles?.highest ?? null;
+}
+
+function getTimeoutKey(guildId, userId) {
+    return `${guildId}:${userId}`;
 }
 
 // ============================================================
@@ -233,6 +244,13 @@ export class ModerationService {
             };
         }
 
+        /*
+         * The bot cannot manage:
+         *
+         * - Its own role
+         * - Roles above it
+         * - Roles equal to it
+         */
         if (
             botRole.position <=
             targetRole.position
@@ -336,10 +354,12 @@ export class ModerationService {
                     moderator.id;
 
                 const hasHighPerms =
-                    moderator.permissions.has([
-                        PermissionFlagsBits.ManageGuild,
-                        PermissionFlagsBits.Administrator,
-                    ]);
+                    moderator.permissions.has(
+                        PermissionFlagsBits.ManageGuild
+                    ) ||
+                    moderator.permissions.has(
+                        PermissionFlagsBits.Administrator
+                    );
 
                 if (!isOwner && !hasHighPerms) {
                     throw new TitanBotError(
@@ -489,7 +509,8 @@ export class ModerationService {
                 !guild ||
                 !member ||
                 !moderator ||
-                !durationMs
+                !durationMs ||
+                durationMs <= 0
             ) {
                 throw new TitanBotError(
                     'Missing required parameters',
@@ -536,50 +557,82 @@ export class ModerationService {
                 );
             }
 
-            // ------------------------------------------------
-            // SAVE OLD ROLES
-            // ------------------------------------------------
-
-            const previousRoleIds =
-                member.roles.cache
-                    .filter(
-                        role =>
-                            role.id !== guild.id
-                    )
-                    .filter(
-                        role =>
-                            role.id !== MUTED_ROLE_ID
-                    )
-                    .filter(
-                        role =>
-                            !role.managed
-                    )
-                    .map(
-                        role =>
-                            role.id
-                    );
+            const key =
+                getTimeoutKey(
+                    guild.id,
+                    member.id
+                );
 
             const timeoutRoles =
                 await loadTimeoutRoles();
 
-            const key =
-                `${guild.id}:${member.id}`;
+            /*
+             * Preserve the user's ORIGINAL roles.
+             *
+             * If they are already timed out, do not overwrite
+             * the original role snapshot with only their current
+             * muted state.
+             */
+            if (!timeoutRoles[key]) {
+                const previousRoleIds =
+                    member.roles.cache
+                        .filter(
+                            role =>
+                                role.id !== guild.id
+                        )
+                        .filter(
+                            role =>
+                                role.id !== MUTED_ROLE_ID
+                        )
+                        .filter(
+                            role =>
+                                !role.managed
+                        )
+                        .map(
+                            role =>
+                                role.id
+                        );
 
-            timeoutRoles[key] = {
-                guildId: guild.id,
-                userId: member.id,
-                roleIds: previousRoleIds,
-                expiresAt:
-                    Date.now() + durationMs,
-            };
+                timeoutRoles[key] = {
+                    guildId: guild.id,
+                    userId: member.id,
+                    roleIds: previousRoleIds,
+                    expiresAt:
+                        Date.now() + durationMs,
+                };
+
+                logger.info(
+                    `Saved ${previousRoleIds.length} previous roles for ${member.user.tag}.`
+                );
+            } else {
+                /*
+                 * Update the expiration without replacing the
+                 * original saved roles.
+                 */
+                timeoutRoles[key].expiresAt =
+                    Date.now() + durationMs;
+            }
 
             await saveTimeoutRoles(
                 timeoutRoles
             );
 
-            logger.info(
-                `Saved ${previousRoleIds.length} previous roles for ${member.user.tag}.`
-            );
+            // ------------------------------------------------
+            // CANCEL OLD RESTORATION TIMER
+            // ------------------------------------------------
+
+            const existingTimer =
+                timeoutRestoreTimers.get(key);
+
+            if (existingTimer) {
+                clearTimeout(
+                    existingTimer
+                );
+
+                timeoutRestoreTimers.delete(
+                    key
+                );
+            }
 
             // ------------------------------------------------
             // APPLY DISCORD TIMEOUT
@@ -626,7 +679,7 @@ export class ModerationService {
             }
 
             // ------------------------------------------------
-            // SCHEDULE AUTOMATIC RESTORATION
+            // SCHEDULE RESTORATION
             // ------------------------------------------------
 
             this.scheduleTimeoutRestoration(
@@ -693,7 +746,10 @@ export class ModerationService {
         durationMs
     ) {
         const key =
-            `${guild.id}:${userId}`;
+            getTimeoutKey(
+                guild.id,
+                userId
+            );
 
         const existingTimer =
             timeoutRestoreTimers.get(key);
@@ -707,7 +763,10 @@ export class ModerationService {
 
         const delay =
             Math.min(
-                Math.max(durationMs, 1000),
+                Math.max(
+                    durationMs,
+                    1000
+                ),
                 MAX_TIMEOUT
             );
 
@@ -719,6 +778,33 @@ export class ModerationService {
                     );
 
                     try {
+                        const timeoutRoles =
+                            await loadTimeoutRoles();
+
+                        const saved =
+                            timeoutRoles[key];
+
+                        if (!saved) {
+                            return;
+                        }
+
+                        const remaining =
+                            saved.expiresAt -
+                            Date.now();
+
+                        /*
+                         * Node timers cannot exceed ~24.8 days.
+                         */
+                        if (remaining > 1000) {
+                            this.scheduleTimeoutRestoration(
+                                guild,
+                                userId,
+                                remaining
+                            );
+
+                            return;
+                        }
+
                         const member =
                             await guild.members
                                 .fetch(userId)
@@ -735,45 +821,13 @@ export class ModerationService {
                         }
 
                         /*
-                         * Only restore if the saved timeout
-                         * actually expired.
-                         */
-                        const timeoutRoles =
-                            await loadTimeoutRoles();
-
-                        const saved =
-                            timeoutRoles[key];
-
-                        if (!saved) {
-                            return;
-                        }
-
-                        if (
-                            Date.now() <
-                            saved.expiresAt
-                        ) {
-                            /*
-                             * Timer was capped by Node's
-                             * maximum timeout duration.
-                             */
-                            this.scheduleTimeoutRestoration(
-                                guild,
-                                userId,
-                                saved.expiresAt -
-                                    Date.now()
-                            );
-
-                            return;
-                        }
-
-                        /*
-                         * If Discord still says they are timed
-                         * out, wait until Discord's timeout ends.
+                         * If Discord's timeout has been extended,
+                         * wait for the actual Discord timeout.
                          */
                         if (
                             member.isCommunicationDisabled()
                         ) {
-                            const remaining =
+                            const discordRemaining =
                                 member.communicationDisabledUntilTimestamp
                                     ? member.communicationDisabledUntilTimestamp -
                                       Date.now()
@@ -783,7 +837,7 @@ export class ModerationService {
                                 guild,
                                 userId,
                                 Math.max(
-                                    remaining,
+                                    discordRemaining,
                                     1000
                                 )
                             );
@@ -819,19 +873,23 @@ export class ModerationService {
         guild,
         member
     ) {
-        try {
-            const timeoutRoles =
-                await loadTimeoutRoles();
+        const key =
+            getTimeoutKey(
+                guild.id,
+                member.id
+            );
 
-            const key =
-                `${guild.id}:${member.id}`;
+        const timeoutRoles =
+            await loadTimeoutRoles();
 
-            const saved =
-                timeoutRoles[key];
+        const saved =
+            timeoutRoles[key];
 
-            /*
-             * Always remove the muted role.
-             */
+        /*
+         * If there is no saved timeout information,
+         * still remove the muted role if necessary.
+         */
+        if (!saved) {
             if (
                 member.roles.cache.has(
                     MUTED_ROLE_ID
@@ -842,10 +900,6 @@ export class ModerationService {
                         MUTED_ROLE_ID,
                         'Timeout ended - removing muted role'
                     );
-
-                    logger.info(
-                        `Removed muted role from ${member.user.tag}.`
-                    );
                 } catch (error) {
                     logger.error(
                         `Failed to remove muted role from ${member.user.tag}:`,
@@ -854,20 +908,30 @@ export class ModerationService {
                 }
             }
 
+            return false;
+        }
+
+        try {
             /*
-             * If there is no saved role data, we're done.
+             * Remove the muted role first.
              */
-            if (!saved) {
-                logger.warn(
-                    `No saved timeout roles found for ${member.user.tag}.`
+            if (
+                member.roles.cache.has(
+                    MUTED_ROLE_ID
+                )
+            ) {
+                await member.roles.remove(
+                    MUTED_ROLE_ID,
+                    'Timeout ended - removing muted role'
                 );
 
-                return false;
+                logger.info(
+                    `Removed muted role from ${member.user.tag}.`
+                );
             }
 
             /*
-             * Make sure the roles still exist and are
-             * manageable by the bot.
+             * Fetch the current role objects.
              */
             const rolesToRestore =
                 saved.roleIds
@@ -880,33 +944,67 @@ export class ModerationService {
                     .filter(
                         role =>
                             role &&
+                            role.id !== guild.id &&
+                            role.id !== MUTED_ROLE_ID &&
                             !role.managed &&
                             role.editable
                     );
 
             /*
-             * Restore the user's previous roles.
+             * Restore roles one at a time so one bad role
+             * cannot prevent all of the others from returning.
              */
-            if (
-                rolesToRestore.length > 0
-            ) {
-                await member.roles.add(
-                    rolesToRestore,
-                    'Timeout ended - restoring previous roles'
-                );
+            let restoredCount = 0;
 
-                logger.info(
-                    `Restored ${rolesToRestore.length} previous roles for ${member.user.tag}.`
-                );
-            } else {
-                logger.info(
-                    `No restorable previous roles found for ${member.user.tag}.`
-                );
+            for (
+                const role of rolesToRestore
+            ) {
+                try {
+                    if (
+                        !member.roles.cache.has(
+                            role.id
+                        )
+                    ) {
+                        await member.roles.add(
+                            role,
+                            'Timeout ended - restoring previous role'
+                        );
+
+                        restoredCount++;
+                    }
+                } catch (error) {
+                    logger.error(
+                        `Failed to restore role ${role.name} (${role.id}) to ${member.user.tag}:`,
+                        error
+                    );
+                }
             }
 
             /*
-             * Delete saved role information ONLY after
-             * restoration has been attempted successfully.
+             * Check whether every role that can be restored
+             * has actually been restored.
+             */
+            const failedRestorableRoles =
+                rolesToRestore.filter(
+                    role =>
+                        !member.roles.cache.has(
+                            role.id
+                        )
+                );
+
+            if (
+                failedRestorableRoles.length > 0
+            ) {
+                logger.warn(
+                    `Not all timeout roles could be restored for ${member.user.tag}. Keeping saved timeout data for another attempt.`
+                );
+
+                return false;
+            }
+
+            /*
+             * Everything that could be restored has been restored.
+             * Now delete the saved state.
              */
             delete timeoutRoles[key];
 
@@ -915,19 +1013,19 @@ export class ModerationService {
             );
 
             logger.info(
-                `Completed timeout role restoration for ${member.user.tag} in ${guild.name}.`
+                `Restored ${restoredCount} previous roles for ${member.user.tag}.`
             );
 
             return true;
         } catch (error) {
             logger.error(
-                `Error restoring timeout roles for ${member?.user?.tag ?? member?.id}:`,
+                `Error restoring timeout roles for ${member.user.tag}:`,
                 error
             );
 
             /*
-             * Do NOT delete the saved role data if restoration
-             * failed. This allows another attempt later.
+             * IMPORTANT:
+             * Do not delete saved data if restoration failed.
              */
             return false;
         }
@@ -974,14 +1072,14 @@ export class ModerationService {
                 );
             }
 
-            /*
-             * Check whether there is saved role data.
-             */
+            const key =
+                getTimeoutKey(
+                    guild.id,
+                    member.id
+                );
+
             const timeoutRoles =
                 await loadTimeoutRoles();
-
-            const key =
-                `${guild.id}:${member.id}`;
 
             const saved =
                 timeoutRoles[key];
@@ -990,12 +1088,15 @@ export class ModerationService {
                 member.isCommunicationDisabled();
 
             /*
-             * If they're not timed out AND there is no saved
-             * timeout state, there is nothing to remove.
+             * If Discord says they aren't timed out and there
+             * is no saved timeout state, there is nothing to do.
              */
             if (
                 !currentlyTimedOut &&
-                !saved
+                !saved &&
+                !member.roles.cache.has(
+                    MUTED_ROLE_ID
+                )
             ) {
                 throw new TitanBotError(
                     'User not timed out',
@@ -1005,7 +1106,7 @@ export class ModerationService {
             }
 
             /*
-             * Remove Discord timeout if it exists.
+             * Remove Discord timeout.
              */
             if (currentlyTimedOut) {
                 await member.timeout(
@@ -1018,9 +1119,7 @@ export class ModerationService {
              * Cancel automatic restoration timer.
              */
             const existingTimer =
-                timeoutRestoreTimers.get(
-                    key
-                );
+                timeoutRestoreTimers.get(key);
 
             if (existingTimer) {
                 clearTimeout(
@@ -1033,12 +1132,19 @@ export class ModerationService {
             }
 
             /*
-             * Restore old roles AND remove muted role.
+             * Restore previous roles and remove muted role.
              */
-            await this.restoreTimeoutRoles(
-                guild,
-                member
-            );
+            const restored =
+                await this.restoreTimeoutRoles(
+                    guild,
+                    member
+                );
+
+            if (!restored && saved) {
+                logger.warn(
+                    `Manual untimeout completed, but some previous roles could not be restored for ${member.user.tag}.`
+                );
+            }
 
             await logModerationAction({
                 client: guild.client,
@@ -1065,6 +1171,7 @@ export class ModerationService {
 
             return {
                 user: member.user.tag,
+                restored,
             };
         } catch (error) {
             logger.error(
@@ -1124,47 +1231,54 @@ export class ModerationService {
                     continue;
                 }
 
-                /*
-                 * If the timeout has already expired,
-                 * restore immediately.
-                 */
-                if (
-                    now >=
-                    saved.expiresAt
-                ) {
-                    if (
-                        !member.isCommunicationDisabled()
-                    ) {
-                        await this.restoreTimeoutRoles(
-                            guild,
-                            member
-                        );
-                    } else {
-                        const remaining =
-                            member.communicationDisabledUntilTimestamp -
-                            Date.now();
+                const remaining =
+                    saved.expiresAt -
+                    now;
 
-                        this.scheduleTimeoutRestoration(
-                            guild,
-                            member.id,
-                            Math.max(
-                                remaining,
-                                1000
-                            )
-                        );
-                    }
-                } else {
-                    /*
-                     * Timeout is still active.
-                     * Schedule restoration for when it expires.
-                     */
+                /*
+                 * Timeout is still active.
+                 */
+                if (remaining > 0) {
                     this.scheduleTimeoutRestoration(
                         guild,
                         member.id,
-                        saved.expiresAt -
-                            Date.now()
+                        remaining
                     );
+
+                    continue;
                 }
+
+                /*
+                 * The saved timeout has expired.
+                 *
+                 * If Discord still has a timeout, trust Discord's
+                 * actual expiration time rather than the saved one.
+                 */
+                if (
+                    member.isCommunicationDisabled()
+                ) {
+                    const discordRemaining =
+                        member.communicationDisabledUntilTimestamp
+                            ? member.communicationDisabledUntilTimestamp -
+                              Date.now()
+                            : 1000;
+
+                    this.scheduleTimeoutRestoration(
+                        guild,
+                        member.id,
+                        Math.max(
+                            discordRemaining,
+                            1000
+                        )
+                    );
+
+                    continue;
+                }
+
+                await this.restoreTimeoutRoles(
+                    guild,
+                    member
+                );
             }
         } catch (error) {
             logger.error(
