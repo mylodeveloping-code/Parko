@@ -54,6 +54,7 @@ const MESSAGE_XP_RATE_LIMIT_WINDOW_MS = 10000;
 // ANTI-SPAM CONFIGURATION
 // ============================================================
 
+// 5 messages within 3 seconds = spam
 const SPAM_MESSAGE_COUNT = 5;
 const SPAM_WINDOW_MS = 3000;
 
@@ -65,14 +66,11 @@ const THIRTY_DAY_BAN_MS = 30 * 24 * 60 * 60 * 1000;
 // PB Exempt role.
 //
 // IMPORTANT:
-// This role does NOT make someone immune to the FIRST
-// automatic anti-spam punishment.
+// This role does NOT make someone immune to automatic
+// punishment.
 //
-// It only prevents escalation after a manual untimeout.
-// Example:
-//   Spam -> 15 minute timeout
-//   Manual untimeout
-//   Spam -> no escalation punishment
+// It only changes what happens if their automatic timeout
+// is manually removed before it naturally expires.
 const PB_EXEMPT_ROLE_ID = '1537848681728835635';
 
 // guildId -> userId -> recent messages
@@ -88,7 +86,29 @@ const spamTracker = new Map();
 // 5 = warning #3 + 30 day ban
 const spamEscalation = new Map();
 
-// Prevent duplicate punishment processing.
+// guildId:userId -> automatic timeout state
+//
+// This stores:
+// - what offense level caused the timeout
+// - when the timeout should naturally expire
+// - whether the user had PB Exempt when the timeout happened
+//
+// This is what allows the bot to distinguish:
+//
+// PB Exempt:
+// automatic timeout -> manually unmuted early -> spam
+// = repeat the same punishment
+//
+// PB Exempt:
+// automatic timeout -> naturally expires -> spam
+// = normal escalation
+//
+// Normal user:
+// automatic timeout -> manually unmuted early -> spam
+// = normal escalation
+const spamTimeoutState = new Map();
+
+// Prevent multiple punishments from being processed at once.
 const spamProcessing = new Set();
 
 // ============================================================
@@ -100,6 +120,7 @@ export default {
 
     async execute(message, client) {
         try {
+            // Ignore bots and DMs.
             if (message.author.bot || !message.guild) {
                 return;
             }
@@ -108,7 +129,7 @@ export default {
                 `Message received from ${message.author.tag}: ${message.content}`
             );
 
-            // Anti-spam runs BEFORE all other message processing.
+            // Anti-spam runs before other message processing.
             await handleAntiSpam(message, client);
 
             const countingProcessed =
@@ -140,12 +161,12 @@ async function handleAntiSpam(message, client) {
         const userId = message.author.id;
 
         /*
-         * The normal moderation exemption list remains fully
-         * exempt from automatic anti-spam.
+         * IMPORTANT:
          *
-         * PB Exempt is intentionally NOT checked here.
-         * PB Exempt members MUST still be automatically punished
-         * for their first spam offense.
+         * Only users in your actual moderation exemption list
+         * are completely exempt from automatic punishment.
+         *
+         * PB Exempt is NOT checked here.
          */
         if (isModerationExempt(userId)) {
             return;
@@ -162,8 +183,8 @@ async function handleAntiSpam(message, client) {
         }
 
         /*
-         * If they are already timed out, don't create another
-         * offense while that timeout is active.
+         * If the user is currently timed out, don't process
+         * another spam offense.
          */
         if (
             member.communicationDisabledUntilTimestamp &&
@@ -186,18 +207,30 @@ async function handleAntiSpam(message, client) {
 
         const messages = guildTracker.get(userId);
 
+        /*
+         * Only keep messages from the last 3 seconds.
+         */
         const recentMessages = messages.filter(
             (entry) =>
                 now - entry.timestamp <= SPAM_WINDOW_MS
         );
 
+        /*
+         * Store the actual Discord message so we can delete it.
+         */
         recentMessages.push({
             timestamp: now,
             message,
         });
 
-        guildTracker.set(userId, recentMessages);
+        guildTracker.set(
+            userId,
+            recentMessages
+        );
 
+        /*
+         * Need at least 5 messages in 3 seconds.
+         */
         if (
             recentMessages.length <
             SPAM_MESSAGE_COUNT
@@ -217,11 +250,15 @@ async function handleAntiSpam(message, client) {
         try {
             const spamMessages = [...recentMessages];
 
-            // Clear tracker for this burst.
+            /*
+             * Clear the tracker so the next burst is separate.
+             */
             guildTracker.set(userId, []);
 
             /*
-             * If all messages are identical:
+             * =================================================
+             * IDENTICAL SPAM
+             * =================================================
              *
              * hi
              * hi
@@ -229,17 +266,22 @@ async function handleAntiSpam(message, client) {
              * hi
              * hi
              *
-             * Keep the first and delete the rest.
+             * Keep the first message and delete the rest.
              *
-             * If messages are different:
+             * =================================================
+             * DIFFERENT SPAM
+             * =================================================
              *
-             * hi
-             * test
-             * abc
+             * alfdkjl
+             * dkja
              * hello
+             * test
              * yo
              *
-             * Delete all of them.
+             * Delete everything.
+             *
+             * Invite links are treated exactly like normal
+             * messages and therefore count toward spam.
              */
 
             const normalizedContents =
@@ -258,6 +300,10 @@ async function handleAntiSpam(message, client) {
                 );
 
             if (allIdentical) {
+                /*
+                 * Keep the first message.
+                 * Delete every duplicate.
+                 */
                 const messagesToDelete =
                     spamMessages.slice(1);
 
@@ -270,6 +316,10 @@ async function handleAntiSpam(message, client) {
                     )
                 );
             } else {
+                /*
+                 * Different messages:
+                 * delete everything.
+                 */
                 await Promise.all(
                     spamMessages.map(
                         (entry) =>
@@ -309,73 +359,121 @@ async function processSpamOffense(
 ) {
     const guildId = message.guild.id;
     const userId = message.author.id;
+    const escalationKey =
+        `${guildId}:${userId}`;
 
-    // Owner/co-owner/etc. remain completely exempt.
     if (isModerationExempt(userId)) {
         return;
     }
 
-    const escalationKey =
-        `${guildId}:${userId}`;
+    const now = Date.now();
 
-    const isPBExempt =
-        member.roles.cache.has(
-            PB_EXEMPT_ROLE_ID
-        );
+    /*
+     * Get the previous automatic timeout state.
+     */
+    const previousTimeout =
+        spamTimeoutState.get(escalationKey);
 
     let offenseLevel =
         spamEscalation.get(escalationKey) || 0;
 
-    /*
-     * If the member has PB Exempt:
-     *
-     * - Their FIRST spam still gets punished normally.
-     * - If they were manually unmuted after that timeout,
-     *   their next spam does NOT escalate.
-     *
-     * We determine this based on their stored escalation.
-     *
-     * Example:
-     * offenseLevel = 1
-     * PB Exempt
-     * manual untimeout
-     * next spam -> no escalation punishment
-     *
-     * We reset their anti-spam escalation after detecting
-     * the next spam burst, so they can still be punished again
-     * if they continue spamming.
-     */
+    let manuallyUnmutedPBExempt = false;
 
-    if (isPBExempt && offenseLevel > 0) {
+    /*
+     * ========================================================
+     * DETECT MANUAL EARLY UNMUTE
+     * ========================================================
+     *
+     * If:
+     *
+     * 1. The previous automatic timeout has NOT reached its
+     *    scheduled expiration time,
+     * AND
+     * 2. Discord says the user is currently NOT timed out,
+     *
+     * then somebody manually removed the timeout.
+     */
+    if (previousTimeout) {
+        const timeoutShouldStillBeActive =
+            now < previousTimeout.expiresAt;
+
+        const currentlyTimedOut =
+            member.communicationDisabledUntilTimestamp &&
+            member.communicationDisabledUntilTimestamp > now;
+
+        const manuallyUnmuted =
+            timeoutShouldStillBeActive &&
+            !currentlyTimedOut;
+
+        if (
+            manuallyUnmuted &&
+            previousTimeout.pbExemptAtTimeout
+        ) {
+            /*
+             * PB Exempt user was manually unmuted early.
+             *
+             * DO NOT advance the punishment level.
+             *
+             * Example:
+             *
+             * 15m timeout
+             * -> manually unmuted
+             * -> spam
+             * -> 15m timeout again
+             *
+             * NOT:
+             *
+             * 15m timeout
+             * -> manually unmuted
+             * -> spam
+             * -> 1h timeout
+             */
+            manuallyUnmutedPBExempt = true;
+
+            logger.info(
+                `Anti-spam: ${message.author.tag} had a PB Exempt automatic timeout manually removed early. Repeating offense level ${offenseLevel}.`
+            );
+        }
+
+        /*
+         * If the timeout naturally expired, it is no longer
+         * considered an active special timeout.
+         */
+        if (
+            now >= previousTimeout.expiresAt
+        ) {
+            spamTimeoutState.delete(
+                escalationKey
+            );
+        }
+    }
+
+    /*
+     * ========================================================
+     * NORMAL ESCALATION
+     * ========================================================
+     *
+     * Normal users always advance.
+     *
+     * PB Exempt users who were manually unmuted early do NOT
+     * advance.
+     */
+    if (!manuallyUnmutedPBExempt) {
+        offenseLevel += 1;
+
         spamEscalation.set(
             escalationKey,
-            0
+            offenseLevel
         );
-
-        logger.info(
-            `PB Exempt member ${message.author.tag} triggered anti-spam after manual untimeout. Escalation reset.`
+    } else {
+        /*
+         * Keep the exact same offense level.
+         */
+        spamEscalation.set(
+            escalationKey,
+            offenseLevel
         );
-
-        return;
     }
-
-    /*
-     * If they're currently timed out, don't stack another
-     * punishment on top of it.
-     */
-    if (
-        member.communicationDisabledUntilTimestamp &&
-        member.communicationDisabledUntilTimestamp > Date.now()
-    ) {
-        return;
-    }
-
-    offenseLevel += 1;
-
-    spamEscalation.set(
-        escalationKey,
-        offenseLevel
-    );
 
     const target =
         `${message.author.tag} (${userId})`;
@@ -386,6 +484,16 @@ async function processSpamOffense(
     const moderator =
         message.guild.members.me;
 
+    /*
+     * Determine whether they currently have PB Exempt.
+     *
+     * This is only relevant when creating a new timeout.
+     */
+    const hasPBExemptRole =
+        member.roles.cache.has(
+            PB_EXEMPT_ROLE_ID
+        );
+
     // ========================================================
     // OFFENSE 1 — 15 MINUTE TIMEOUT
     // ========================================================
@@ -394,40 +502,93 @@ async function processSpamOffense(
         const reason =
             'Automatic anti-spam: 5 messages sent within 3 seconds.';
 
+        /*
+         * PB Exempt users do NOT receive the normal message
+         * saying the next offense will be 1 hour.
+         */
+        await sendSpamDM(
+            message.author,
+            message.guild,
+            'timeout',
+            '15 minutes',
+            reason,
+            1,
+            hasPBExemptRole ||
+            manuallyUnmutedPBExempt
+        );
+
         try {
             const result =
                 await ModerationService.timeoutUser({
                     guild: message.guild,
                     member,
                     moderator,
-                    durationMs: FIRST_TIMEOUT_MS,
+                    durationMs:
+                        FIRST_TIMEOUT_MS,
                     reason,
                 });
 
-            await sendSpamDM(
-                message.author,
-                message.guild,
-                'timeout',
-                '15 minutes',
-                reason,
-                1
+            /*
+             * Save exactly when the automatic timeout should
+             * naturally expire.
+             */
+            spamTimeoutState.set(
+                escalationKey,
+                {
+                    offenseLevel: 1,
+
+                    expiresAt:
+                        Date.now() +
+                        FIRST_TIMEOUT_MS,
+
+                    /*
+                     * Record PB Exempt status at the moment
+                     * the automatic timeout was issued.
+                     *
+                     * Removing the role later does NOT remove
+                     * this state.
+                     */
+                    pbExemptAtTimeout:
+                        hasPBExemptRole ||
+                        (
+                            previousTimeout
+                                ?.pbExemptAtTimeout &&
+                            manuallyUnmutedPBExempt
+                        ),
+                }
             );
 
             await logModerationAction({
                 client,
                 guild: message.guild,
                 event: {
-                    action: 'Member Timed Out',
+                    action:
+                        'Member Timed Out',
+
                     target,
                     executor,
+
                     reason,
-                    duration: '15 minutes',
+
+                    duration:
+                        '15 minutes',
+
                     metadata: {
                         userId,
-                        moderatorId: client.user.id,
+
+                        moderatorId:
+                            client.user.id,
+
                         automatic: true,
-                        spamOffense: 1,
-                        pbExempt: isPBExempt,
+
+                        spamOffense:
+                            offenseLevel,
+
+                        pbExemptAtTimeout:
+                            hasPBExemptRole ||
+                            manuallyUnmutedPBExempt,
+
+                        manuallyUnmutedPBExempt,
                     },
                 },
             });
@@ -453,40 +614,74 @@ async function processSpamOffense(
         const reason =
             'Automatic anti-spam: repeated spam after a previous timeout.';
 
+        await sendSpamDM(
+            message.author,
+            message.guild,
+            'timeout',
+            '1 hour',
+            reason,
+            2,
+            hasPBExemptRole ||
+            manuallyUnmutedPBExempt
+        );
+
         try {
             const result =
                 await ModerationService.timeoutUser({
                     guild: message.guild,
                     member,
                     moderator,
-                    durationMs: SECOND_TIMEOUT_MS,
+                    durationMs:
+                        SECOND_TIMEOUT_MS,
                     reason,
                 });
 
-            await sendSpamDM(
-                message.author,
-                message.guild,
-                'timeout',
-                '1 hour',
-                reason,
-                2
+            spamTimeoutState.set(
+                escalationKey,
+                {
+                    offenseLevel: 2,
+
+                    expiresAt:
+                        Date.now() +
+                        SECOND_TIMEOUT_MS,
+
+                    pbExemptAtTimeout:
+                        hasPBExemptRole ||
+                        manuallyUnmutedPBExempt,
+                }
             );
 
             await logModerationAction({
                 client,
                 guild: message.guild,
                 event: {
-                    action: 'Member Timed Out',
+                    action:
+                        'Member Timed Out',
+
                     target,
                     executor,
+
                     reason,
-                    duration: '1 hour',
+
+                    duration:
+                        '1 hour',
+
                     metadata: {
                         userId,
-                        moderatorId: client.user.id,
+
+                        moderatorId:
+                            client.user.id,
+
                         automatic: true,
-                        spamOffense: 2,
-                        pbExempt: isPBExempt,
+
+                        spamOffense:
+                            offenseLevel,
+
+                        pbExemptAtTimeout:
+                            hasPBExemptRole ||
+                            manuallyUnmutedPBExempt,
+
+                        manuallyUnmutedPBExempt,
                     },
                 },
             });
@@ -552,20 +747,21 @@ async function processSpamOffense(
                 reason,
             });
 
-        if (!warningResult) {
+        if (isModerationExempt(userId)) {
             return;
         }
 
-        try {
-            await sendSpamDM(
-                message.author,
-                message.guild,
-                'ban',
-                '30 days',
-                reason,
-                3
-            );
+        await sendSpamDM(
+            message.author,
+            message.guild,
+            'ban',
+            '30 days',
+            reason,
+            3,
+            false
+        );
 
+        try {
             const result =
                 await ModerationService.banUser({
                     guild: message.guild,
@@ -579,18 +775,32 @@ async function processSpamOffense(
                 client,
                 guild: message.guild,
                 event: {
-                    action: 'Member Banned',
+                    action:
+                        'Member Banned',
+
                     target,
                     executor,
+
                     reason:
                         'Automatic anti-spam: third warning reached. 30 day ban.',
-                    duration: '30 days',
+
+                    duration:
+                        '30 days',
+
                     metadata: {
                         userId,
-                        moderatorId: client.user.id,
+
+                        moderatorId:
+                            client.user.id,
+
                         automatic: true,
-                        spamOffense: 5,
-                        banDuration: '30 days',
+
+                        spamOffense:
+                            offenseLevel,
+
+                        banDuration:
+                            '30 days',
+
                         warningId:
                             warningResult?.warningId,
                     },
@@ -626,21 +836,35 @@ async function sendSpamDM(
     action,
     duration,
     reason,
-    offense
+    offense,
+    pbExemptSpecial = false
 ) {
     try {
         let title;
         let description;
 
         if (action === 'timeout') {
-            let nextAction;
+            let nextAction = '';
 
-            if (offense === 1) {
-                nextAction =
-                    'Further spam will normally result in a 1-hour timeout.';
+            /*
+             * Normal users get the normal escalation message.
+             */
+            if (!pbExemptSpecial) {
+                if (offense === 1) {
+                    nextAction =
+                        'Further spam will normally result in a 1-hour timeout.';
+                } else if (offense === 2) {
+                    nextAction =
+                        'Further spam will normally result in a warning.';
+                }
             } else {
+                /*
+                 * PB Exempt users do NOT get told that their next
+                 * offense will automatically escalate if their
+                 * timeout is manually removed early.
+                 */
                 nextAction =
-                    'Further spam will normally result in a warning.';
+                    'If this timeout is manually removed before it expires, this automatic anti-spam punishment will not escalate on your next spam offense.';
             }
 
             title =
@@ -649,8 +873,12 @@ async function sendSpamDM(
             description =
                 `You have been timed out in **${guild.name}**.\n\n` +
                 `**Duration:** ${duration}\n` +
-                `**Reason:** ${reason}\n\n` +
-                `⚠️ ${nextAction}`;
+                `**Reason:** ${reason}`;
+
+            if (nextAction) {
+                description +=
+                    `\n\n${nextAction}`;
+            }
         } else if (action === 'ban') {
             title =
                 '🔨 You Have Been Banned';
@@ -687,6 +915,9 @@ async function sendSpamDM(
 
         return true;
     } catch (error) {
+        /*
+         * DMs being disabled must NEVER prevent the punishment.
+         */
         logger.warn(
             `Could not DM ${user.tag} about anti-spam action.`,
             error
@@ -720,9 +951,11 @@ async function issueSpamWarning({
         } = await WarningService.addWarning({
             guildId,
             userId,
-            moderatorId: client.user.id,
+            moderatorId:
+                client.user.id,
             reason,
-            timestamp: Date.now(),
+            timestamp:
+                Date.now(),
         });
 
         const caseId =
@@ -730,21 +963,36 @@ async function issueSpamWarning({
                 client,
                 guild: message.guild,
                 event: {
-                    action: 'User Warned',
+                    action:
+                        'User Warned',
+
                     target:
                         `${message.author.tag} (${userId})`,
+
                     executor:
                         `${client.user.tag} (${client.user.id})`,
+
                     reason,
+
                     metadata: {
                         userId,
-                        moderatorId: client.user.id,
-                        totalWarns: totalCount,
+
+                        moderatorId:
+                            client.user.id,
+
+                        totalWarns:
+                            totalCount,
+
                         warningNumber,
-                        automatic: true,
+
+                        automatic:
+                            true,
+
                         spamOffense:
                             warningNumber + 2,
-                        warningId: id,
+
+                        warningId:
+                            id,
                     },
                 },
             });
@@ -768,13 +1016,16 @@ async function issueSpamWarning({
                     createEmbed({
                         title:
                             `⚠️ Warning #${warningNumber}`,
+
                         description:
                             `You have received **Warning #${warningNumber}** in **${message.guild.name}**.\n\n` +
                             `**Reason:** ${reason}\n` +
                             `**Total Warnings:** ${totalCount}\n` +
                             `**Case ID:** #${caseId || 'N/A'}\n\n` +
                             `⚠️ ${nextAction}`,
-                        color: 'warning',
+
+                        color:
+                            'warning',
                     }),
                 ],
             });
@@ -814,7 +1065,8 @@ function scheduleAutomaticUnban(
     remainingMs,
     client
 ) {
-    const MAX_TIMEOUT = 2147483647;
+    const MAX_TIMEOUT =
+        2147483647;
 
     const timeout =
         Math.min(
@@ -823,11 +1075,15 @@ function scheduleAutomaticUnban(
         );
 
     setTimeout(async () => {
-        if (remainingMs > MAX_TIMEOUT) {
+        if (
+            remainingMs >
+            MAX_TIMEOUT
+        ) {
             scheduleAutomaticUnban(
                 guildId,
                 userId,
-                remainingMs - MAX_TIMEOUT,
+                remainingMs -
+                    MAX_TIMEOUT,
                 client
             );
 
@@ -836,12 +1092,15 @@ function scheduleAutomaticUnban(
 
         try {
             const guild =
-                client.guilds.cache.get(guildId);
+                client.guilds.cache.get(
+                    guildId
+                );
 
             if (!guild) {
                 logger.warn(
                     `Could not automatically unban ${userId}: guild ${guildId} not found.`
                 );
+
                 return;
             }
 
@@ -854,7 +1113,15 @@ function scheduleAutomaticUnban(
                 `Anti-spam: automatically unbanned ${userId} after 30 days.`
             );
 
+            /*
+             * Reset the escalation after the 30-day ban has
+             * naturally expired.
+             */
             spamEscalation.delete(
+                `${guildId}:${userId}`
+            );
+
+            spamTimeoutState.delete(
                 `${guildId}:${userId}`
             );
 
@@ -868,6 +1135,10 @@ function scheduleAutomaticUnban(
                 );
 
                 spamEscalation.delete(
+                    `${guildId}:${userId}`
+                );
+
+                spamTimeoutState.delete(
                     `${guildId}:${userId}`
                 );
 
@@ -939,6 +1210,7 @@ async function handlePrefixCommand(
             )
         ) {
             commandName = 'music';
+
             args = [
                 musicPrefixShortcut,
                 ...args,
@@ -967,6 +1239,7 @@ async function handlePrefixCommand(
             logger.warn(
                 `Command not found: ${resolvedCommandName}`
             );
+
             return;
         }
 
@@ -982,10 +1255,12 @@ async function handlePrefixCommand(
                         createEmbed({
                             title:
                                 'Maintenance Mode',
+
                             description:
                                 getBotMessage(
                                     'maintenanceMode'
                                 ),
+
                             color:
                                 'warning',
                         }),
@@ -1007,10 +1282,12 @@ async function handlePrefixCommand(
                         createEmbed({
                             title:
                                 'Feature Disabled',
+
                             description:
                                 getBotMessage(
                                     'commandDisabled'
                                 ),
+
                             color:
                                 'error',
                         }),
@@ -1042,15 +1319,19 @@ async function handlePrefixCommand(
                     createEmbed({
                         title:
                             'Slash Command Only',
+
                         description:
                             `${restriction.reason}\nUse \`/${resolvedCommandName}\` instead.`,
+
                         color:
                             'info',
                     });
 
                 await message.channel
                     .send({
-                        embeds: [embed],
+                        embeds: [
+                            embed,
+                        ],
                     })
                     .catch(() => {});
             }
@@ -1073,15 +1354,19 @@ async function handlePrefixCommand(
                 createEmbed({
                     title:
                         'Command Disabled',
+
                     description:
                         'This command has been disabled for this server.',
+
                     color:
                         'error',
                 });
 
             await message.channel
                 .send({
-                    embeds: [embed],
+                    embeds: [
+                        embed,
+                    ],
                 })
                 .catch(() => {});
 
@@ -1091,6 +1376,7 @@ async function handlePrefixCommand(
         const mockInteractionForProtection = {
             guildId:
                 message.guild.id,
+
             user:
                 message.author,
         };
@@ -1114,15 +1400,19 @@ async function handlePrefixCommand(
                 createEmbed({
                     title:
                         'Command Cooldown',
+
                     description:
                         `This command is on cooldown. Please wait ${formattedCooldown} before trying again.`,
+
                     color:
                         'error',
                 });
 
             await message.channel
                 .send({
-                    embeds: [embed],
+                    embeds: [
+                        embed,
+                    ],
                 })
                 .catch(() => {});
 
@@ -1197,9 +1487,15 @@ async function handleCountingGame(
                 message.guild.id,
                 {
                     ...config,
-                    nextNumber: 1,
-                    lastUserId: null,
-                    currentStreak: 0,
+
+                    nextNumber:
+                        1,
+
+                    lastUserId:
+                        null,
+
+                    currentStreak:
+                        0,
                 }
             );
 
@@ -1332,7 +1628,8 @@ async function handleLeveling(
             levelingConfig.xpCooldown ||
             60;
 
-        const now = Date.now();
+        const now =
+            Date.now();
 
         const timeSinceLastMessage =
             now -
