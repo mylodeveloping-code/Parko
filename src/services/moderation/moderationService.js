@@ -6,9 +6,9 @@ import { TitanBotError, ErrorTypes } from '../../utils/errorHandler.js';
 import {
   logModerationAction,
   saveTimeoutRoles,
-  getTimeoutRoles,
-  deleteTimeoutRoles,
-  MUTED_ROLE_ID,
+  restoreTimeoutRoles,
+  getMemberRoleIds,
+  applyMutedRole,
 } from '../../utils/moderation.js';
 
 function getTargetLabel(target) {
@@ -142,7 +142,11 @@ export class ModerationService {
       );
     }
 
-    const modCheck = this.validateHierarchy(moderator, target, action);
+    const modCheck = this.validateHierarchy(
+      moderator,
+      target,
+      action
+    );
 
     if (!modCheck.valid) {
       throw new TitanBotError(
@@ -152,6 +156,10 @@ export class ModerationService {
       );
     }
   }
+
+  // ============================================================
+  // BAN
+  // ============================================================
 
   static async banUser({
     guild,
@@ -172,13 +180,21 @@ export class ModerationService {
       let targetMember = null;
 
       try {
-        targetMember = await guild.members.fetch(user.id).catch(() => null);
+        targetMember = await guild.members
+          .fetch(user.id)
+          .catch(() => null);
       } catch (err) {
-        logger.debug('Target not in guild, proceeding with ban');
+        logger.debug(
+          'Target not in guild, proceeding with ban'
+        );
       }
 
       if (targetMember) {
-        this.assertModerationHierarchy(moderator, targetMember, 'ban');
+        this.assertModerationHierarchy(
+          moderator,
+          targetMember,
+          'ban'
+        );
       } else {
         const isOwner = guild.ownerId === moderator.id;
 
@@ -230,6 +246,10 @@ export class ModerationService {
     }
   }
 
+  // ============================================================
+  // KICK
+  // ============================================================
+
   static async kickUser({
     guild,
     member,
@@ -245,7 +265,11 @@ export class ModerationService {
         );
       }
 
-      this.assertModerationHierarchy(moderator, member, 'kick');
+      this.assertModerationHierarchy(
+        moderator,
+        member,
+        'kick'
+      );
 
       if (!member.kickable) {
         const targetLabel = getTargetLabel(member);
@@ -290,6 +314,10 @@ export class ModerationService {
     }
   }
 
+  // ============================================================
+  // TIMEOUT
+  // ============================================================
+
   static async timeoutUser({
     guild,
     member,
@@ -306,7 +334,11 @@ export class ModerationService {
         );
       }
 
-      this.assertModerationHierarchy(moderator, member, 'timeout');
+      this.assertModerationHierarchy(
+        moderator,
+        member,
+        'timeout'
+      );
 
       if (!member.moderatable) {
         const targetLabel = getTargetLabel(member);
@@ -319,77 +351,54 @@ export class ModerationService {
         );
       }
 
-      const mutedRole = guild.roles.cache.get(MUTED_ROLE_ID);
+      // ========================================================
+      // SAVE THEIR CURRENT ROLES BEFORE REMOVING THEM
+      // ========================================================
 
-      if (!mutedRole) {
+      const previousRoleIds = getMemberRoleIds(member);
+
+      const expiresAt = Date.now() + durationMs;
+
+      const saved = await saveTimeoutRoles({
+        guildId: guild.id,
+        userId: member.id,
+        roleIds: previousRoleIds,
+        expiresAt,
+      });
+
+      if (!saved) {
         throw new TitanBotError(
-          'Muted role not found',
-          ErrorTypes.CONFIGURATION,
-          `The Muted role (${MUTED_ROLE_ID}) could not be found.`
+          'Could not save user roles',
+          ErrorTypes.DATABASE,
+          'I could not save the user\'s previous roles, so the timeout was cancelled to prevent their roles from being lost.'
         );
       }
 
-      if (!mutedRole.editable) {
+      // ========================================================
+      // APPLY MUTED ROLE
+      // ========================================================
+
+      const mutedApplied = await applyMutedRole(member);
+
+      if (!mutedApplied) {
         throw new TitanBotError(
-          'Muted role not manageable',
+          'Could not apply muted role',
           ErrorTypes.PERMISSION,
-          'I cannot manage the Muted role. Make sure my bot role is above the Muted role.'
+          'I could not apply the Muted role. Check that my bot role is above the Muted role.'
         );
       }
 
-      /*
-       * If the user is not already timed out, save their current roles.
-       * This prevents a second timeout from overwriting the original roles.
-       */
-      if (!member.isCommunicationDisabled()) {
-        const previousRoleIds = member.roles.cache
-          .filter(role => role.id !== guild.id)
-          .filter(role => role.id !== MUTED_ROLE_ID)
-          .filter(role => !role.managed)
-          .map(role => role.id);
+      // ========================================================
+      // APPLY DISCORD TIMEOUT
+      // ========================================================
 
-        const saved = await saveTimeoutRoles(
-          guild.id,
-          member.id,
-          previousRoleIds
-        );
+      await member.timeout(
+        durationMs,
+        reason
+      );
 
-        if (!saved) {
-          throw new TitanBotError(
-            'Could not save previous roles',
-            ErrorTypes.DATABASE,
-            'I could not save the user\'s previous roles, so the timeout was not applied.'
-          );
-        }
-      }
-
-      /*
-       * Remove all manageable roles except @everyone,
-       * then add the Muted role.
-       */
-      const rolesToRemove = member.roles.cache
-        .filter(role => role.id !== guild.id)
-        .filter(role => role.id !== MUTED_ROLE_ID)
-        .filter(role => !role.managed)
-        .filter(role => role.editable);
-
-      if (rolesToRemove.size > 0) {
-        await member.roles.remove(
-          rolesToRemove,
-          'Applying timeout mute role'
-        );
-      }
-
-      if (!member.roles.cache.has(MUTED_ROLE_ID)) {
-        await member.roles.add(
-          mutedRole,
-          'Applying timeout mute role'
-        );
-      }
-
-      await member.timeout(durationMs, reason);
-
-      const durationMinutes = Math.floor(durationMs / 60000);
+      const durationMinutes =
+        Math.floor(durationMs / 60000);
 
       const caseId = await logModerationAction({
         client: guild.client,
@@ -403,7 +412,8 @@ export class ModerationService {
           metadata: {
             userId: member.id,
             moderatorId: moderator.id,
-            durationMs
+            durationMs,
+            mutedRoleId: '1537615321438093425'
           }
         }
       });
@@ -419,10 +429,18 @@ export class ModerationService {
         reason
       };
     } catch (error) {
-      logger.error('Error timing out user:', error);
+      logger.error(
+        'Error timing out user:',
+        error
+      );
+
       throw error;
     }
   }
+
+  // ============================================================
+  // REMOVE TIMEOUT / RESTORE ROLES
+  // ============================================================
 
   static async removeTimeoutUser({
     guild,
@@ -464,45 +482,25 @@ export class ModerationService {
         );
       }
 
-      await member.timeout(null, reason);
-
-      const saved = await getTimeoutRoles(
-        guild.id,
-        member.id
+      // Remove Discord timeout.
+      await member.timeout(
+        null,
+        reason
       );
 
-      const mutedRole = guild.roles.cache.get(MUTED_ROLE_ID);
+      // ========================================================
+      // RESTORE THEIR OLD ROLES
+      // ========================================================
 
-      if (
-        mutedRole &&
-        member.roles.cache.has(MUTED_ROLE_ID) &&
-        mutedRole.editable
-      ) {
-        await member.roles.remove(
-          mutedRole,
-          'Removing timeout mute role'
+      const restored = await restoreTimeoutRoles(
+        member
+      );
+
+      if (!restored) {
+        logger.warn(
+          `Timeout removed from ${member.user.tag}, but no saved roles could be restored.`
         );
       }
-
-      if (saved?.roleIds?.length) {
-        const rolesToRestore = saved.roleIds
-          .map(roleId => guild.roles.cache.get(roleId))
-          .filter(role => role)
-          .filter(role => !role.managed)
-          .filter(role => role.editable);
-
-        if (rolesToRestore.length > 0) {
-          await member.roles.add(
-            rolesToRestore,
-            'Restoring roles after timeout'
-          );
-        }
-      }
-
-      await deleteTimeoutRoles(
-        guild.id,
-        member.id
-      );
 
       await logModerationAction({
         client: guild.client,
@@ -514,7 +512,8 @@ export class ModerationService {
           reason,
           metadata: {
             userId: member.id,
-            moderatorId: moderator.id
+            moderatorId: moderator.id,
+            rolesRestored: restored
           }
         }
       });
@@ -524,13 +523,22 @@ export class ModerationService {
       );
 
       return {
-        user: member.user.tag
+        user: member.user.tag,
+        rolesRestored: restored
       };
     } catch (error) {
-      logger.error('Error removing timeout:', error);
+      logger.error(
+        'Error removing timeout:',
+        error
+      );
+
       throw error;
     }
   }
+
+  // ============================================================
+  // UNBAN
+  // ============================================================
 
   static async unbanUser({
     guild,
@@ -558,7 +566,10 @@ export class ModerationService {
         );
       }
 
-      await guild.members.unban(user.id, reason);
+      await guild.members.unban(
+        user.id,
+        reason
+      );
 
       const caseId = await logModerationAction({
         client: guild.client,
@@ -585,7 +596,11 @@ export class ModerationService {
         reason
       };
     } catch (error) {
-      logger.error('Error unbanning user:', error);
+      logger.error(
+        'Error unbanning user:',
+        error
+      );
+
       throw error;
     }
   }
