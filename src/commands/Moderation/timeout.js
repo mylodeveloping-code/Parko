@@ -4,6 +4,7 @@ import { logger } from '../../utils/logger.js';
 import { TitanBotError, ErrorTypes } from '../../utils/errorHandler.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
 import { ModerationService } from '../../services/moderation/moderationService.js';
+import { isModerationExempt } from '../../utils/moderation.js';
 
 const durationChoices = [
     { name: "5 minutes", value: 5 },
@@ -37,10 +38,12 @@ export default {
             option.setName("reason").setDescription("Reason for the timeout"),
         )
         .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers),
+
     category: "moderation",
 
     async execute(interaction, config, client) {
         const deferSuccess = await InteractionHelper.safeDefer(interaction);
+
         if (!deferSuccess) {
             logger.warn(`Timeout interaction defer failed`, {
                 userId: interaction.user.id,
@@ -53,7 +56,9 @@ export default {
         const targetUser = interaction.options.getUser("target");
         const member = interaction.options.getMember("target");
         const durationMinutes = interaction.options.getInteger("duration");
-        const reason = interaction.options.getString("reason") || "No reason provided";
+        const reason =
+            interaction.options.getString("reason") ||
+            "No reason provided";
 
         if (!targetUser) {
             throw new TitanBotError(
@@ -64,6 +69,15 @@ export default {
             );
         }
 
+        // Moderation exemption
+        if (isModerationExempt(targetUser.id)) {
+            throw new TitanBotError(
+                "User is moderation exempt",
+                ErrorTypes.VALIDATION,
+                "This user is exempt from all moderation actions.",
+            );
+        }
+
         if (targetUser.id === interaction.user.id) {
             throw new TitanBotError(
                 "Cannot timeout self",
@@ -71,6 +85,7 @@ export default {
                 "You cannot timeout yourself.",
             );
         }
+
         if (targetUser.id === client.user.id) {
             throw new TitanBotError(
                 "Cannot timeout bot",
@@ -78,6 +93,7 @@ export default {
                 "You cannot timeout the bot.",
             );
         }
+
         if (!member) {
             throw new TitanBotError(
                 "Target not found",
@@ -87,6 +103,7 @@ export default {
         }
 
         const durationMs = durationMinutes * 60 * 1000;
+
         const result = await ModerationService.timeoutUser({
             guild: interaction.guild,
             member,
@@ -96,8 +113,9 @@ export default {
         });
 
         const durationDisplay =
-            durationChoices.find((c) => c.value === durationMinutes)
-                ?.name || `${durationMinutes} minutes`;
+            durationChoices.find(
+                (c) => c.value === durationMinutes
+            )?.name || `${durationMinutes} minutes`;
 
         await InteractionHelper.safeEditReply(interaction, {
             embeds: [
