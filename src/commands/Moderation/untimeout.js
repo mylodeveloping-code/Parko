@@ -5,80 +5,70 @@ import { logger } from '../../utils/logger.js';
 import { ModerationService } from '../../services/moderation/moderationService.js';
 import { TitanBotError, ErrorTypes } from '../../utils/errorHandler.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
-import { markSpamTimeoutManuallyRemoved } from '../events/messageCreate.js';
+import { markSpamTimeoutManuallyRemoved } from '../../events/messageCreate.js';
 
 export default {
     data: new SlashCommandBuilder()
-        .setName("untimeout")
-        .setDescription("Remove timeout from a user")
-        .addUserOption((option) =>
+        .setName('untimeout')
+        .setDescription('Remove timeout from a user')
+        .addUserOption(option =>
             option
-                .setName("target")
-                .setDescription("User to untimeout")
-                .setRequired(true),
+                .setName('target')
+                .setDescription('User to untimeout')
+                .setRequired(true)
         )
         .setDefaultMemberPermissions(
             PermissionFlagsBits.ModerateMembers
         ),
 
-    category: "moderation",
+    category: 'moderation',
 
     async execute(interaction, config, client) {
         const deferSuccess =
             await InteractionHelper.safeDefer(interaction);
 
         if (!deferSuccess) {
-            logger.warn(
-                `Untimeout interaction defer failed`,
-                {
-                    userId:
-                        interaction.user.id,
-
-                    guildId:
-                        interaction.guildId,
-
-                    commandName:
-                        'untimeout',
-                }
-            );
+            logger.warn('Untimeout interaction defer failed', {
+                userId: interaction.user.id,
+                guildId: interaction.guildId,
+                commandName: 'untimeout',
+            });
 
             return;
         }
 
+        const targetUser =
+            interaction.options.getUser('target');
+
+        const member =
+            interaction.options.getMember('target');
+
+        if (!targetUser) {
+            throw new TitanBotError(
+                'Missing target user',
+                ErrorTypes.USER_INPUT,
+                'You must specify a user to untimeout.',
+                {
+                    subtype: 'invalid_user',
+                }
+            );
+        }
+
+        if (!member) {
+            throw new TitanBotError(
+                'Target not found',
+                ErrorTypes.USER_INPUT,
+                'The target user is not currently in this server.'
+            );
+        }
+
         try {
-            const targetUser =
-                interaction.options.getUser("target");
-
-            const member =
-                interaction.options.getMember("target");
-
-            if (!targetUser) {
-                throw new TitanBotError(
-                    'Missing target user',
-                    ErrorTypes.USER_INPUT,
-                    'You must specify a user to untimeout.',
-                    {
-                        subtype:
-                            'invalid_user',
-                    },
-                );
-            }
-
-            if (!member) {
-                throw new TitanBotError(
-                    "Target not found",
-                    ErrorTypes.USER_INPUT,
-                    "The target user is not currently in this server.",
-                );
-            }
-
             /*
-             * Make sure the member is actually timed out.
+             * Check whether the user is actually timed out.
              */
             const currentlyTimedOut =
                 member.communicationDisabledUntilTimestamp &&
-                member.communicationDisabledUntilTimestamp >
-                    Date.now();
+                member.communicationDisabledUntilTimestamp > Date.now();
 
             if (!currentlyTimedOut) {
                 await InteractionHelper.safeEditReply(
@@ -99,21 +89,14 @@ export default {
              * Remove the Discord timeout.
              */
             await ModerationService.removeTimeoutUser({
-                guild:
-                    interaction.guild,
-
+                guild: interaction.guild,
                 member,
-
-                moderator:
-                    interaction.member,
+                moderator: interaction.member,
             });
 
             /*
              * Tell the anti-spam system that this timeout
              * was manually removed.
-             *
-             * This is important because the anti-spam system
-             * keeps its own timeout state.
              */
             markSpamTimeoutManuallyRemoved(
                 interaction.guild.id,
@@ -136,7 +119,7 @@ export default {
             );
         } catch (error) {
             logger.error(
-                `Failed to untimeout ${interaction.options.getUser("target")?.tag || 'unknown user'}:`,
+                `Failed to untimeout ${targetUser.tag}:`,
                 error
             );
 
@@ -144,4 +127,3 @@ export default {
         }
     },
 };
-```
