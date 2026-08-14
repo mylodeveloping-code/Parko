@@ -1,6 +1,9 @@
 import { Events } from 'discord.js';
 import { logger } from '../utils/logger.js';
-import { getLevelingConfig, getUserLevelData } from '../services/leveling/leveling.js';
+import {
+  getLevelingConfig,
+  getUserLevelData,
+} from '../services/leveling/leveling.js';
 import { addXp } from '../services/leveling/xpSystem.js';
 import { checkRateLimit } from '../utils/rateLimiter.js';
 import { parsePrefixCommand } from '../utils/prefixParser.js';
@@ -54,26 +57,26 @@ const MESSAGE_XP_RATE_LIMIT_WINDOW_MS = 10000;
 const SPAM_MESSAGE_COUNT = 5;
 const SPAM_WINDOW_MS = 2500;
 
-const FIRST_TIMEOUT_MS = 15 * 60 * 1000;      // 15 minutes
-const SECOND_TIMEOUT_MS = 60 * 60 * 1000;     // 1 hour
+const FIRST_TIMEOUT_MS = 15 * 60 * 1000;
+const SECOND_TIMEOUT_MS = 60 * 60 * 1000;
+
 const THIRTY_DAY_BAN_MS = 30 * 24 * 60 * 60 * 1000;
 
-// Tracks recent messages from users.
 // guildId -> userId -> timestamps[]
 const spamTracker = new Map();
 
-// Tracks the escalation level for each user.
-// 0 = no offenses
-// 1 = received 15 minute timeout
-// 2 = received 1 hour timeout
-// 3 = received warning #1
-// 4 = received warning #2
-// 5 = received warning #3 + 30 day ban
+// guildId:userId -> offense level
 //
-// guildId -> userId -> offense level
+// 0 = no offenses
+// 1 = 15 minute timeout
+// 2 = 1 hour timeout
+// 3 = warning #1
+// 4 = warning #2
+// 5 = warning #3 + 30 day ban
 const spamEscalation = new Map();
 
-// Prevents multiple punishments from being processed simultaneously.
+// Prevents duplicate punishments from being processed
+// simultaneously.
 const spamProcessing = new Set();
 
 // ============================================================
@@ -91,10 +94,10 @@ export default {
         `Message received from ${message.author.tag}: ${message.content}`
       );
 
-      // Check spam before normal message processing.
       await handleAntiSpam(message, client);
 
-      const countingProcessed = await handleCountingGame(message, client);
+      const countingProcessed =
+        await handleCountingGame(message, client);
 
       if (countingProcessed) {
         return;
@@ -104,10 +107,136 @@ export default {
 
       await handleLeveling(message, client);
     } catch (error) {
-      logger.error('Error in messageCreate event:', error);
+      logger.error(
+        'Error in messageCreate event:',
+        error
+      );
     }
   },
 };
+
+// ============================================================
+// ANTI-SPAM DM HELPERS
+// ============================================================
+
+async function sendSpamTimeoutDM(
+  user,
+  guild,
+  duration,
+  reason,
+  offense
+) {
+  try {
+    const nextAction = {
+      1: 'Further spam will result in a 1-hour timeout.',
+      2: 'Further spam will result in a warning.',
+    }[offense] || 'Further spam may result in additional moderation action.';
+
+    await user.send({
+      embeds: [
+        createEmbed({
+          title: '⏳ You Have Been Timed Out',
+          description:
+            `You have been timed out in **${guild.name}**.\n\n` +
+            `**Duration:** ${duration}\n` +
+            `**Reason:** ${reason}\n\n` +
+            `⚠️ ${nextAction}`,
+          color: 'warning',
+        }),
+      ],
+    });
+
+    logger.info(
+      `Sent anti-spam timeout DM to ${user.tag}`
+    );
+
+    return true;
+  } catch (error) {
+    logger.warn(
+      `Could not DM ${user.tag} about their anti-spam timeout.`,
+      error
+    );
+
+    return false;
+  }
+}
+
+async function sendSpamWarningDM(
+  user,
+  guild,
+  warningNumber,
+  reason,
+  caseId
+) {
+  try {
+    const nextAction = {
+      1: 'Further spam will result in Warning #2.',
+      2: 'Further spam will result in Warning #3 and a 30-day ban.',
+      3: 'You have reached Warning #3 and will receive a 30-day ban.',
+    }[warningNumber];
+
+    await user.send({
+      embeds: [
+        createEmbed({
+          title: '⚠️ You Have Received a Warning',
+          description:
+            `You have received **Warning #${warningNumber}** in **${guild.name}**.\n\n` +
+            `**Reason:** ${reason}\n` +
+            `**Case ID:** #${caseId || 'N/A'}\n\n` +
+            `⚠️ ${nextAction}`,
+          color: 'warning',
+        }),
+      ],
+    });
+
+    logger.info(
+      `Sent anti-spam warning DM to ${user.tag}`
+    );
+
+    return true;
+  } catch (error) {
+    logger.warn(
+      `Could not DM ${user.tag} about their anti-spam warning.`,
+      error
+    );
+
+    return false;
+  }
+}
+
+async function sendSpamBanDM(
+  user,
+  guild,
+  reason
+) {
+  try {
+    await user.send({
+      embeds: [
+        createEmbed({
+          title: '🔨 You Have Been Banned',
+          description:
+            `You have been banned from **${guild.name}** for **30 days**.\n\n` +
+            `**Reason:** ${reason}\n\n` +
+            `This ban was automatically issued after repeated spam violations and reaching your third warning.`,
+          color: 'error',
+        }),
+      ],
+    });
+
+    logger.info(
+      `Sent anti-spam ban DM to ${user.tag}`
+    );
+
+    return true;
+  } catch (error) {
+    logger.warn(
+      `Could not DM ${user.tag} about their anti-spam ban.`,
+      error
+    );
+
+    return false;
+  }
+}
 
 // ============================================================
 // ANTI-SPAM
@@ -131,10 +260,7 @@ async function handleAntiSpam(message, client) {
       return;
     }
 
-    // Ignore users who currently have a timeout.
-    //
-    // Their next spam offense will only count after
-    // their current timeout has expired.
+    // Don't count messages while the user is currently timed out.
     if (
       member.communicationDisabledUntilTimestamp &&
       member.communicationDisabledUntilTimestamp > Date.now()
@@ -156,22 +282,27 @@ async function handleAntiSpam(message, client) {
 
     const timestamps = guildTracker.get(userId);
 
-    // Remove messages outside the 2.5 second window.
     const recentTimestamps = timestamps.filter(
-      (timestamp) => now - timestamp <= SPAM_WINDOW_MS
+      (timestamp) =>
+        now - timestamp <= SPAM_WINDOW_MS
     );
 
     recentTimestamps.push(now);
 
-    guildTracker.set(userId, recentTimestamps);
+    guildTracker.set(
+      userId,
+      recentTimestamps
+    );
 
-    // User hasn't reached the spam threshold.
-    if (recentTimestamps.length < SPAM_MESSAGE_COUNT) {
+    if (
+      recentTimestamps.length <
+      SPAM_MESSAGE_COUNT
+    ) {
       return;
     }
 
-    // Prevent duplicate processing.
-    const processingKey = `${guildId}:${userId}`;
+    const processingKey =
+      `${guildId}:${userId}`;
 
     if (spamProcessing.has(processingKey)) {
       return;
@@ -179,17 +310,23 @@ async function handleAntiSpam(message, client) {
 
     spamProcessing.add(processingKey);
 
-    // Clear the current burst so another immediate burst
-    // doesn't trigger the same offense repeatedly.
+    // Reset the current burst.
     guildTracker.set(userId, []);
 
     try {
-      await processSpamOffense(message, member, client);
+      await processSpamOffense(
+        message,
+        member,
+        client
+      );
     } finally {
       spamProcessing.delete(processingKey);
     }
   } catch (error) {
-    logger.error('Error handling anti-spam:', error);
+    logger.error(
+      'Error handling anti-spam:',
+      error
+    );
   }
 }
 
@@ -197,7 +334,11 @@ async function handleAntiSpam(message, client) {
 // SPAM ESCALATION
 // ============================================================
 
-async function processSpamOffense(message, member, client) {
+async function processSpamOffense(
+  message,
+  member,
+  client
+) {
   const guildId = message.guild.id;
   const userId = message.author.id;
 
@@ -205,11 +346,13 @@ async function processSpamOffense(message, member, client) {
     return;
   }
 
-  const escalationKey = `${guildId}:${userId}`;
+  const escalationKey =
+    `${guildId}:${userId}`;
 
-  let offenseLevel = spamEscalation.get(escalationKey) || 0;
+  let offenseLevel =
+    spamEscalation.get(escalationKey) || 0;
 
-  // Safety check: don't punish someone who is currently timed out.
+  // Safety check.
   if (
     member.communicationDisabledUntilTimestamp &&
     member.communicationDisabledUntilTimestamp > Date.now()
@@ -218,26 +361,47 @@ async function processSpamOffense(message, member, client) {
   }
 
   offenseLevel += 1;
-  spamEscalation.set(escalationKey, offenseLevel);
 
-  const target = `${message.author.tag} (${userId})`;
-  const executor = `${client.user.tag} (${client.user.id})`;
+  spamEscalation.set(
+    escalationKey,
+    offenseLevel
+  );
+
+  const target =
+    `${message.author.tag} (${userId})`;
+
+  const executor =
+    `${client.user.tag} (${client.user.id})`;
+
+  const moderator =
+    message.guild.members.me;
 
   // ==========================================================
   // OFFENSE 1 — 15 MINUTE TIMEOUT
   // ==========================================================
 
   if (offenseLevel === 1) {
-    const duration = FIRST_TIMEOUT_MS;
+    const reason =
+      'Automatic anti-spam: 5 messages within 2.5 seconds.';
+
+    // DM BEFORE timeout so the user is notified.
+    await sendSpamTimeoutDM(
+      message.author,
+      message.guild,
+      '15 minutes',
+      reason,
+      1
+    );
 
     try {
-      await ModerationService.timeoutUser({
-        guild: message.guild,
-        member,
-        moderator: message.guild.members.me,
-        durationMs: duration,
-        reason: 'Automatic anti-spam: 5 messages within 2.5 seconds.',
-      });
+      const result =
+        await ModerationService.timeoutUser({
+          guild: message.guild,
+          member,
+          moderator,
+          durationMs: FIRST_TIMEOUT_MS,
+          reason,
+        });
 
       await logModerationAction({
         client,
@@ -246,7 +410,7 @@ async function processSpamOffense(message, member, client) {
           action: 'Member Timed Out',
           target,
           executor,
-          reason: 'Automatic anti-spam: 5 messages within 2.5 seconds.',
+          reason,
           duration: '15 minutes',
           metadata: {
             userId,
@@ -275,16 +439,26 @@ async function processSpamOffense(message, member, client) {
   // ==========================================================
 
   if (offenseLevel === 2) {
-    const duration = SECOND_TIMEOUT_MS;
+    const reason =
+      'Automatic anti-spam: repeated spam after a previous timeout.';
+
+    await sendSpamTimeoutDM(
+      message.author,
+      message.guild,
+      '1 hour',
+      reason,
+      2
+    );
 
     try {
-      await ModerationService.timeoutUser({
-        guild: message.guild,
-        member,
-        moderator: message.guild.members.me,
-        durationMs: duration,
-        reason: 'Automatic anti-spam: repeated spam after previous timeout.',
-      });
+      const result =
+        await ModerationService.timeoutUser({
+          guild: message.guild,
+          member,
+          moderator,
+          durationMs: SECOND_TIMEOUT_MS,
+          reason,
+        });
 
       await logModerationAction({
         client,
@@ -293,8 +467,7 @@ async function processSpamOffense(message, member, client) {
           action: 'Member Timed Out',
           target,
           executor,
-          reason:
-            'Automatic anti-spam: repeated spam after previous timeout.',
+          reason,
           duration: '1 hour',
           metadata: {
             userId,
@@ -326,9 +499,9 @@ async function processSpamOffense(message, member, client) {
     await issueSpamWarning({
       message,
       client,
-      member,
       warningNumber: 1,
-      reason: 'Automatic anti-spam: repeated spam after previous timeouts.',
+      reason:
+        'Automatic anti-spam: repeated spam after previous timeouts.',
     });
 
     return;
@@ -342,9 +515,9 @@ async function processSpamOffense(message, member, client) {
     await issueSpamWarning({
       message,
       client,
-      member,
       warningNumber: 2,
-      reason: 'Automatic anti-spam: repeated spam after previous warnings.',
+      reason:
+        'Automatic anti-spam: repeated spam after previous warnings.',
     });
 
     return;
@@ -355,25 +528,34 @@ async function processSpamOffense(message, member, client) {
   // ==========================================================
 
   if (offenseLevel >= 5) {
-    await issueSpamWarning({
-      message,
-      client,
-      member,
-      warningNumber: 3,
-      reason:
-        'Automatic anti-spam: third warning reached after repeated spam.',
-    });
+    const reason =
+      'Automatic anti-spam: third warning reached after repeated spam.';
+
+    const warningResult =
+      await issueSpamWarning({
+        message,
+        client,
+        warningNumber: 3,
+        reason,
+      });
 
     // Check exemption again before the ban.
     if (isModerationExempt(userId)) {
       return;
     }
 
+    // Notify the user before banning them.
+    await sendSpamBanDM(
+      message.author,
+      message.guild,
+      reason
+    );
+
     try {
       await ModerationService.banUser({
         guild: message.guild,
         user: message.author,
-        moderator: message.guild.members.me,
+        moderator,
         reason:
           'Automatic anti-spam: third warning reached. 30 day ban.',
       });
@@ -394,6 +576,7 @@ async function processSpamOffense(message, member, client) {
             automatic: true,
             spamOffense: 5,
             banDuration: '30 days',
+            warningId: warningResult?.warningId,
           },
         },
       });
@@ -402,7 +585,6 @@ async function processSpamOffense(message, member, client) {
         `Anti-spam: ${message.author.tag} received a 30 day ban.`
       );
 
-      // Schedule the unban.
       scheduleAutomaticUnban(
         message.guild.id,
         userId,
@@ -419,13 +601,12 @@ async function processSpamOffense(message, member, client) {
 }
 
 // ============================================================
-// SPAM WARNING HANDLER
+// AUTOMATIC WARNING
 // ============================================================
 
 async function issueSpamWarning({
   message,
   client,
-  member,
   warningNumber,
   reason,
 }) {
@@ -433,11 +614,14 @@ async function issueSpamWarning({
   const userId = message.author.id;
 
   if (isModerationExempt(userId)) {
-    return;
+    return null;
   }
 
   try {
-    const { id, totalCount } = await WarningService.addWarning({
+    const {
+      id,
+      totalCount,
+    } = await WarningService.addWarning({
       guildId,
       userId,
       moderatorId: client.user.id,
@@ -445,57 +629,74 @@ async function issueSpamWarning({
       timestamp: Date.now(),
     });
 
-    await logModerationAction({
-      client,
-      guild: message.guild,
-      event: {
-        action: 'User Warned',
-        target: `${message.author.tag} (${userId})`,
-        executor: `${client.user.tag} (${client.user.id})`,
-        reason,
-        metadata: {
-          userId,
-          moderatorId: client.user.id,
-          totalWarns: totalCount,
-          warningNumber,
-          automatic: true,
-          spamOffense: warningNumber + 2,
-          warningId: id,
+    const caseId =
+      await logModerationAction({
+        client,
+        guild: message.guild,
+        event: {
+          action: 'User Warned',
+          target:
+            `${message.author.tag} (${userId})`,
+          executor:
+            `${client.user.tag} (${client.user.id})`,
+          reason,
+          metadata: {
+            userId,
+            moderatorId: client.user.id,
+            totalWarns: totalCount,
+            warningNumber,
+            automatic: true,
+            spamOffense:
+              warningNumber + 2,
+            warningId: id,
+          },
         },
-      },
-    });
+      });
+
+    await sendSpamWarningDM(
+      message.author,
+      message.guild,
+      warningNumber,
+      reason,
+      caseId
+    );
 
     logger.info(
       `Anti-spam: ${message.author.tag} received automatic warning #${warningNumber}.`
     );
+
+    return {
+      warningId: id,
+      caseId,
+      totalCount,
+    };
   } catch (error) {
     logger.error(
       `Failed to issue anti-spam warning to ${message.author.tag}:`,
       error
     );
+
+    return null;
   }
 }
 
 // ============================================================
-// 30 DAY UNBAN
-// ============================================================
-//
-// Node's normal setTimeout cannot safely handle a 30-day
-// timeout in one call because of its maximum delay limit.
-//
-// This schedules the unban in smaller chunks.
-//
-// IMPORTANT:
-// This in-memory timer is lost if the bot completely restarts.
-// A persistent scheduler/database system would be needed to
-// guarantee unbanning after a restart.
-//
+// AUTOMATIC 30-DAY UNBAN
 // ============================================================
 
-function scheduleAutomaticUnban(guildId, userId, remainingMs, client) {
+function scheduleAutomaticUnban(
+  guildId,
+  userId,
+  remainingMs,
+  client
+) {
   const MAX_TIMEOUT = 2147483647;
 
-  const timeout = Math.min(remainingMs, MAX_TIMEOUT);
+  const timeout =
+    Math.min(
+      remainingMs,
+      MAX_TIMEOUT
+    );
 
   setTimeout(async () => {
     if (remainingMs > MAX_TIMEOUT) {
@@ -510,7 +711,8 @@ function scheduleAutomaticUnban(guildId, userId, remainingMs, client) {
     }
 
     try {
-      const guild = client.guilds.cache.get(guildId);
+      const guild =
+        client.guilds.cache.get(guildId);
 
       if (!guild) {
         logger.warn(
@@ -528,18 +730,26 @@ function scheduleAutomaticUnban(guildId, userId, remainingMs, client) {
         `Anti-spam: automatically unbanned ${userId} after 30 days.`
       );
 
-      // Reset escalation after the 30 day ban expires.
-      spamEscalation.delete(`${guildId}:${userId}`);
-      spamTracker.get(guildId)?.delete(userId);
+      spamEscalation.delete(
+        `${guildId}:${userId}`
+      );
+
+      spamTracker
+        .get(guildId)
+        ?.delete(userId);
     } catch (error) {
-      // User may already be unbanned.
       if (error?.code === 10026) {
         logger.info(
           `User ${userId} was already unbanned when automatic unban was attempted.`
         );
 
-        spamEscalation.delete(`${guildId}:${userId}`);
-        spamTracker.get(guildId)?.delete(userId);
+        spamEscalation.delete(
+          `${guildId}:${userId}`
+        );
+
+        spamTracker
+          .get(guildId)
+          ?.delete(userId);
 
         return;
       }
@@ -556,45 +766,78 @@ function scheduleAutomaticUnban(guildId, userId, remainingMs, client) {
 // PREFIX COMMANDS
 // ============================================================
 
-async function handlePrefixCommand(message, client) {
+async function handlePrefixCommand(
+  message,
+  client
+) {
   try {
-    const guildConfig = await getGuildConfig(client, message.guild.id);
-    const prefix = guildConfig?.prefix || getCommandPrefix();
-    const parsed = parsePrefixCommand(message.content, prefix);
+    const guildConfig =
+      await getGuildConfig(
+        client,
+        message.guild.id
+      );
+
+    const prefix =
+      guildConfig?.prefix ||
+      getCommandPrefix();
+
+    const parsed =
+      parsePrefixCommand(
+        message.content,
+        prefix
+      );
 
     if (!parsed) {
       return;
     }
 
-    let { commandName, args } = parsed;
+    let {
+      commandName,
+      args,
+    } = parsed;
 
-    const musicPrefixShortcut = commandName.toLowerCase();
+    const musicPrefixShortcut =
+      commandName.toLowerCase();
 
-    const MUSIC_PREFIX_SHORTCUTS = new Set([
-      'leave',
-      'pause',
-      'resume',
-      'skip',
-      'stop',
-      'volume',
-    ]);
+    const MUSIC_PREFIX_SHORTCUTS =
+      new Set([
+        'leave',
+        'pause',
+        'resume',
+        'skip',
+        'stop',
+        'volume',
+      ]);
 
-    if (MUSIC_PREFIX_SHORTCUTS.has(musicPrefixShortcut)) {
+    if (
+      MUSIC_PREFIX_SHORTCUTS.has(
+        musicPrefixShortcut
+      )
+    ) {
       commandName = 'music';
-      args = [musicPrefixShortcut, ...args];
+      args = [
+        musicPrefixShortcut,
+        ...args,
+      ];
     }
 
     logger.info(
       `Prefix command detected: ${commandName}, args: ${args.join(', ')}`
     );
 
-    const resolvedCommandName = resolveCommandAlias(commandName);
+    const resolvedCommandName =
+      resolveCommandAlias(
+        commandName
+      );
 
     logger.info(
       `Resolved command name: ${resolvedCommandName}`
     );
 
-    const command = client.commands.get(resolvedCommandName);
+    const command =
+      client.commands.get(
+        resolvedCommandName
+      );
 
     if (!command) {
       logger.warn(
@@ -605,56 +848,82 @@ async function handlePrefixCommand(message, client) {
 
     if (
       isMaintenanceMode() &&
-      !isBotOwner(message.author.id)
+      !isBotOwner(
+        message.author.id
+      )
     ) {
-      await message.channel.send({
-        embeds: [
-          createEmbed({
-            title: 'Maintenance Mode',
-            description: getBotMessage('maintenanceMode'),
-            color: 'warning',
-          }),
-        ],
-      }).catch(() => {});
+      await message.channel
+        .send({
+          embeds: [
+            createEmbed({
+              title: 'Maintenance Mode',
+              description:
+                getBotMessage(
+                  'maintenanceMode'
+                ),
+              color: 'warning',
+            }),
+          ],
+        })
+        .catch(() => {});
 
       return;
     }
-
-    if (!isCommandCategoryEnabled(command.category)) {
-      await message.channel.send({
-        embeds: [
-          createEmbed({
-            title: 'Feature Disabled',
-            description: getBotMessage('commandDisabled'),
-            color: 'error',
-          }),
-        ],
-      }).catch(() => {});
-
-      return;
-    }
-
-    const restriction = getPrefixRestriction(
-      command,
-      args,
-      resolveSubcommandAlias
-    );
 
     if (
-      !supportsPrefixExecution(command) ||
+      !isCommandCategoryEnabled(
+        command.category
+      )
+    ) {
+      await message.channel
+        .send({
+          embeds: [
+            createEmbed({
+              title: 'Feature Disabled',
+              description:
+                getBotMessage(
+                  'commandDisabled'
+                ),
+              color: 'error',
+            }),
+          ],
+        })
+        .catch(() => {});
+
+      return;
+    }
+
+    const restriction =
+      getPrefixRestriction(
+        command,
+        args,
+        resolveSubcommandAlias
+      );
+
+    if (
+      !supportsPrefixExecution(
+        command
+      ) ||
       restriction.blocked
     ) {
-      if (restriction.blocked && restriction.reason) {
-        const embed = createEmbed({
-          title: 'Slash Command Only',
-          description:
-            `${restriction.reason}\nUse \`/${resolvedCommandName}\` instead.`,
-          color: 'info',
-        });
+      if (
+        restriction.blocked &&
+        restriction.reason
+      ) {
+        const embed =
+          createEmbed({
+            title:
+              'Slash Command Only',
+            description:
+              `${restriction.reason}\nUse \`/${resolvedCommandName}\` instead.`,
+            color: 'info',
+          });
 
-        await message.channel.send({
-          embeds: [embed],
-        }).catch(() => {});
+        await message.channel
+          .send({
+            embeds: [embed],
+          })
+          .catch(() => {});
       }
 
       return;
@@ -664,58 +933,73 @@ async function handlePrefixCommand(message, client) {
       !(await isCommandEnabled(
         client,
         message.guild.id,
-        resolvePrefixAccessKey(command.data, args),
+        resolvePrefixAccessKey(
+          command.data,
+          args
+        ),
         command.category
       ))
     ) {
-      const embed = createEmbed({
-        title: 'Command Disabled',
-        description:
-          'This command has been disabled for this server.',
-        color: 'error',
-      });
+      const embed =
+        createEmbed({
+          title:
+            'Command Disabled',
+          description:
+            'This command has been disabled for this server.',
+          color: 'error',
+        });
 
-      await message.channel.send({
-        embeds: [embed],
-      }).catch(() => {});
+      await message.channel
+        .send({
+          embeds: [embed],
+        })
+        .catch(() => {});
 
       return;
     }
 
     const mockInteractionForProtection = {
-      guildId: message.guild.id,
-      user: message.author,
+      guildId:
+        message.guild.id,
+      user:
+        message.author,
     };
 
-    const abuseProtection = await enforceAbuseProtection(
-      mockInteractionForProtection,
-      command,
-      resolvedCommandName
-    );
+    const abuseProtection =
+      await enforceAbuseProtection(
+        mockInteractionForProtection,
+        command,
+        resolvedCommandName
+      );
 
-    if (!abuseProtection.allowed) {
+    if (
+      !abuseProtection.allowed
+    ) {
       const formattedCooldown =
         formatCooldownDuration(
           abuseProtection.remainingMs
         );
 
-      const embed = createEmbed({
-        title: 'Command Cooldown',
-        description:
-          `This command is on cooldown. Please wait ${formattedCooldown} before trying again.`,
-        color: 'error',
-      });
+      const embed =
+        createEmbed({
+          title:
+            'Command Cooldown',
+          description:
+            `This command is on cooldown. Please wait ${formattedCooldown} before trying again.`,
+          color: 'error',
+        });
 
-      await message.channel.send({
-        embeds: [embed],
-      }).catch(() => {});
+      await message.channel
+        .send({
+          embeds: [embed],
+        })
+        .catch(() => {});
 
       return;
     }
 
     logger.info(
-      `Executing prefix command: ${prefix}${commandName} ` +
-      `(resolved to ${resolvedCommandName}) by ${message.author.tag}`
+      `Executing prefix command: ${prefix}${commandName} (resolved to ${resolvedCommandName}) by ${message.author.tag}`
     );
 
     await executePrefixCommand(
@@ -738,34 +1022,44 @@ async function handlePrefixCommand(message, client) {
 // COUNTING GAME
 // ============================================================
 
-async function handleCountingGame(message, client) {
+async function handleCountingGame(
+  message,
+  client
+) {
   try {
-    const config = await getCountingGameConfig(
-      client,
-      message.guild.id
-    );
+    const config =
+      await getCountingGameConfig(
+        client,
+        message.guild.id
+      );
 
     if (
       !config.enabled ||
       !config.channelId ||
-      message.channel.id !== config.channelId
+      message.channel.id !==
+        config.channelId
     ) {
       return false;
     }
 
-    const content = message.content.trim();
+    const content =
+      message.content.trim();
 
-    const validCount = isValidCountingMessage(
-      content,
-      config
-    );
+    const validCount =
+      isValidCountingMessage(
+        content,
+        config
+      );
 
     const invalidAttempt =
       !validCount ||
-      message.author.id === config.lastUserId;
+      message.author.id ===
+        config.lastUserId;
 
     if (invalidAttempt) {
-      await message.delete().catch(() => {});
+      await message
+        .delete()
+        .catch(() => {});
 
       await saveCountingGameConfig(
         client,
@@ -784,7 +1078,9 @@ async function handleCountingGame(message, client) {
         );
 
       setTimeout(() => {
-        failureMessage.delete().catch(() => {});
+        failureMessage
+          .delete()
+          .catch(() => {});
       }, 10000);
 
       return true;
@@ -811,16 +1107,20 @@ async function handleCountingGame(message, client) {
 // LEVELING
 // ============================================================
 
-async function handleLeveling(message, client) {
+async function handleLeveling(
+  message,
+  client
+) {
   try {
     const rateLimitKey =
       `xp-event:${message.guild.id}:${message.author.id}`;
 
-    const canProcess = await checkRateLimit(
-      rateLimitKey,
-      MESSAGE_XP_RATE_LIMIT_ATTEMPTS,
-      MESSAGE_XP_RATE_LIMIT_WINDOW_MS
-    );
+    const canProcess =
+      await checkRateLimit(
+        rateLimitKey,
+        MESSAGE_XP_RATE_LIMIT_ATTEMPTS,
+        MESSAGE_XP_RATE_LIMIT_WINDOW_MS
+      );
 
     if (!canProcess) {
       return;
@@ -837,15 +1137,17 @@ async function handleLeveling(message, client) {
     }
 
     if (
-      levelingConfig.ignoredChannels?.includes(
-        message.channel.id
-      )
+      levelingConfig.ignoredChannels
+        ?.includes(
+          message.channel.id
+        )
     ) {
       return;
     }
 
     if (
-      levelingConfig.ignoredRoles?.length > 0
+      levelingConfig.ignoredRoles
+        ?.length > 0
     ) {
       const member =
         await message.guild.members.fetch(
@@ -856,9 +1158,9 @@ async function handleLeveling(message, client) {
         member &&
         member.roles.cache.some(
           role =>
-            levelingConfig.ignoredRoles.includes(
-              role.id
-            )
+            levelingConfig
+              .ignoredRoles
+              .includes(role.id)
         )
       ) {
         return;
@@ -866,16 +1168,19 @@ async function handleLeveling(message, client) {
     }
 
     if (
-      levelingConfig.blacklistedUsers?.includes(
-        message.author.id
-      )
+      levelingConfig
+        .blacklistedUsers
+        ?.includes(
+          message.author.id
+        )
     ) {
       return;
     }
 
     if (
       !message.content ||
-      message.content.trim().length === 0
+      message.content.trim()
+        .length === 0
     ) {
       return;
     }
@@ -888,12 +1193,14 @@ async function handleLeveling(message, client) {
       );
 
     const cooldownTime =
-      levelingConfig.xpCooldown || 60;
+      levelingConfig.xpCooldown ||
+      60;
 
     const now = Date.now();
 
     const timeSinceLastMessage =
-      now - (userData.lastMessage || 0);
+      now -
+      (userData.lastMessage || 0);
 
     if (
       timeSinceLastMessage <
@@ -912,15 +1219,21 @@ async function handleLeveling(message, client) {
       levelingConfig.xpPerMessage?.max ||
       25;
 
-    const safeMinXP = Math.max(1, minXP);
+    const safeMinXP =
+      Math.max(1, minXP);
 
     const safeMaxXP =
-      Math.max(safeMinXP, maxXP);
+      Math.max(
+        safeMinXP,
+        maxXP
+      );
 
     const xpToGive =
       Math.floor(
         Math.random() *
-        (safeMaxXP - safeMinXP + 1)
+          (safeMaxXP -
+            safeMinXP +
+            1)
       ) + safeMinXP;
 
     let finalXP = xpToGive;
@@ -932,7 +1245,8 @@ async function handleLeveling(message, client) {
       finalXP =
         Math.floor(
           finalXP *
-          levelingConfig.xpMultiplier
+            levelingConfig
+              .xpMultiplier
         );
     }
 
