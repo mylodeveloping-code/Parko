@@ -51,6 +51,17 @@ const MESSAGE_XP_RATE_LIMIT_ATTEMPTS = 12;
 const MESSAGE_XP_RATE_LIMIT_WINDOW_MS = 10000;
 
 // ============================================================
+// PB EXEMPTION
+// ============================================================
+
+// Anyone with this role is exempt from AUTOMATIC punishments.
+//
+// This does NOT give them command permissions.
+// This does NOT exempt them from manual moderation.
+// It only prevents automatic anti-spam punishments.
+const PB_EXEMPT_ROLE_ID = '1537848681728835635';
+
+// ============================================================
 // ANTI-SPAM CONFIGURATION
 // ============================================================
 
@@ -80,6 +91,28 @@ const spamEscalation = new Map();
 const spamProcessing = new Set();
 
 // ============================================================
+// AUTOMATIC MODERATION EXEMPTION CHECK
+// ============================================================
+
+function isAutomaticModerationExempt(userId, member) {
+    // Existing owner/co-owner/configured exemptions.
+    if (isModerationExempt(userId)) {
+        return true;
+    }
+
+    // PB Exempt role.
+    if (
+        member?.roles?.cache?.has(
+            PB_EXEMPT_ROLE_ID
+        )
+    ) {
+        return true;
+    }
+
+    return false;
+}
+
+// ============================================================
 // MESSAGE CREATE
 // ============================================================
 
@@ -98,7 +131,7 @@ export default {
             );
 
             // Anti-spam MUST run before any content-based processing.
-            // This means invite links count exactly like normal messages.
+            // Invite links count toward the spam threshold.
             await handleAntiSpam(message, client);
 
             const countingProcessed =
@@ -129,11 +162,6 @@ async function handleAntiSpam(message, client) {
         const guildId = message.guild.id;
         const userId = message.author.id;
 
-        // Owner/co-owner/other configured exemptions.
-        if (isModerationExempt(userId)) {
-            return;
-        }
-
         const member =
             message.member ||
             await message.guild.members
@@ -141,6 +169,16 @@ async function handleAntiSpam(message, client) {
                 .catch(() => null);
 
         if (!member) {
+            return;
+        }
+
+        // Existing exemptions + PB Exempt role.
+        if (
+            isAutomaticModerationExempt(
+                userId,
+                member
+            )
+        ) {
             return;
         }
 
@@ -155,29 +193,39 @@ async function handleAntiSpam(message, client) {
         const now = Date.now();
 
         if (!spamTracker.has(guildId)) {
-            spamTracker.set(guildId, new Map());
+            spamTracker.set(
+                guildId,
+                new Map()
+            );
         }
 
-        const guildTracker = spamTracker.get(guildId);
+        const guildTracker =
+            spamTracker.get(guildId);
 
         if (!guildTracker.has(userId)) {
             guildTracker.set(userId, []);
         }
 
-        const messages = guildTracker.get(userId);
+        const messages =
+            guildTracker.get(userId);
 
         // Keep messages from the last 3 seconds.
-        const recentMessages = messages.filter(
-            (entry) =>
-                now - entry.timestamp <= SPAM_WINDOW_MS
-        );
+        const recentMessages =
+            messages.filter(
+                (entry) =>
+                    now - entry.timestamp <=
+                    SPAM_WINDOW_MS
+            );
 
         // Store the actual message object.
         //
-        // IMPORTANT:
-        // We do NOT check message.content here.
-        // Therefore Discord invite links, normal text,
-        // attachments, etc. can all count toward spam.
+        // Message content is NOT checked here, so:
+        // - normal text
+        // - Discord invite links
+        // - attachments
+        // - repeated/different text
+        //
+        // can all count toward the spam threshold.
         recentMessages.push({
             timestamp: now,
             message,
@@ -199,17 +247,27 @@ async function handleAntiSpam(message, client) {
         const processingKey =
             `${guildId}:${userId}`;
 
-        if (spamProcessing.has(processingKey)) {
+        if (
+            spamProcessing.has(
+                processingKey
+            )
+        ) {
             return;
         }
 
-        spamProcessing.add(processingKey);
+        spamProcessing.add(
+            processingKey
+        );
 
         try {
-            const spamMessages = [...recentMessages];
+            const spamMessages =
+                [...recentMessages];
 
             // Clear the tracker so the next burst is separate.
-            guildTracker.set(userId, []);
+            guildTracker.set(
+                userId,
+                []
+            );
 
             /*
              * SAME MESSAGE:
@@ -232,8 +290,6 @@ async function handleAntiSpam(message, client) {
              * yo
              *
              * Delete all five.
-             *
-             * Invite links are NOT excluded from this check.
              */
 
             const normalizedContents =
@@ -248,12 +304,12 @@ async function handleAntiSpam(message, client) {
             const allIdentical =
                 normalizedContents.every(
                     (content) =>
-                        content === firstContent
+                        content ===
+                        firstContent
                 );
 
             if (allIdentical) {
                 // Keep the first message.
-                // Delete all duplicates.
                 const messagesToDelete =
                     spamMessages
                         .slice(1)
@@ -271,7 +327,7 @@ async function handleAntiSpam(message, client) {
                 );
             } else {
                 // Different messages:
-                // delete every message in the spam burst.
+                // delete every message in the burst.
                 await Promise.all(
                     spamMessages.map(
                         (entry) =>
@@ -309,10 +365,19 @@ async function processSpamOffense(
     member,
     client
 ) {
-    const guildId = message.guild.id;
-    const userId = message.author.id;
+    const guildId =
+        message.guild.id;
 
-    if (isModerationExempt(userId)) {
+    const userId =
+        message.author.id;
+
+    // Existing exemptions + PB Exempt role.
+    if (
+        isAutomaticModerationExempt(
+            userId,
+            member
+        )
+    ) {
         return;
     }
 
@@ -320,12 +385,15 @@ async function processSpamOffense(
         `${guildId}:${userId}`;
 
     let offenseLevel =
-        spamEscalation.get(escalationKey) || 0;
+        spamEscalation.get(
+            escalationKey
+        ) || 0;
 
     // Don't punish someone who is currently timed out.
     if (
         member.communicationDisabledUntilTimestamp &&
-        member.communicationDisabledUntilTimestamp > Date.now()
+        member.communicationDisabledUntilTimestamp >
+            Date.now()
     ) {
         return;
     }
@@ -369,7 +437,8 @@ async function processSpamOffense(
                     guild: message.guild,
                     member,
                     moderator,
-                    durationMs: FIRST_TIMEOUT_MS,
+                    durationMs:
+                        FIRST_TIMEOUT_MS,
                     reason,
                 });
 
@@ -377,14 +446,17 @@ async function processSpamOffense(
                 client,
                 guild: message.guild,
                 event: {
-                    action: 'Member Timed Out',
+                    action:
+                        'Member Timed Out',
                     target,
                     executor,
                     reason,
-                    duration: '15 minutes',
+                    duration:
+                        '15 minutes',
                     metadata: {
                         userId,
-                        moderatorId: client.user.id,
+                        moderatorId:
+                            client.user.id,
                         automatic: true,
                         spamOffense: 1,
                     },
@@ -427,7 +499,8 @@ async function processSpamOffense(
                     guild: message.guild,
                     member,
                     moderator,
-                    durationMs: SECOND_TIMEOUT_MS,
+                    durationMs:
+                        SECOND_TIMEOUT_MS,
                     reason,
                 });
 
@@ -435,14 +508,17 @@ async function processSpamOffense(
                 client,
                 guild: message.guild,
                 event: {
-                    action: 'Member Timed Out',
+                    action:
+                        'Member Timed Out',
                     target,
                     executor,
                     reason,
-                    duration: '1 hour',
+                    duration:
+                        '1 hour',
                     metadata: {
                         userId,
-                        moderatorId: client.user.id,
+                        moderatorId:
+                            client.user.id,
                         automatic: true,
                         spamOffense: 2,
                     },
@@ -510,7 +586,13 @@ async function processSpamOffense(
                 reason,
             });
 
-        if (isModerationExempt(userId)) {
+        // Check again before applying the ban.
+        if (
+            isAutomaticModerationExempt(
+                userId,
+                member
+            )
+        ) {
             return;
         }
 
@@ -537,18 +619,22 @@ async function processSpamOffense(
                 client,
                 guild: message.guild,
                 event: {
-                    action: 'Member Banned',
+                    action:
+                        'Member Banned',
                     target,
                     executor,
                     reason:
                         'Automatic anti-spam: third warning reached. 30 day ban.',
-                    duration: '30 days',
+                    duration:
+                        '30 days',
                     metadata: {
                         userId,
-                        moderatorId: client.user.id,
+                        moderatorId:
+                            client.user.id,
                         automatic: true,
                         spamOffense: 5,
-                        banDuration: '30 days',
+                        banDuration:
+                            '30 days',
                         warningId:
                             warningResult?.warningId,
                     },
@@ -640,7 +726,6 @@ async function sendSpamDM(
 
         return true;
     } catch (error) {
-        // DMs being disabled must NEVER prevent moderation.
         logger.warn(
             `Could not DM ${user.tag} about anti-spam action.`,
             error
@@ -660,10 +745,24 @@ async function issueSpamWarning({
     warningNumber,
     reason,
 }) {
-    const guildId = message.guild.id;
-    const userId = message.author.id;
+    const guildId =
+        message.guild.id;
 
-    if (isModerationExempt(userId)) {
+    const userId =
+        message.author.id;
+
+    const member =
+        message.member ||
+        await message.guild.members
+            .fetch(userId)
+            .catch(() => null);
+
+    if (
+        isAutomaticModerationExempt(
+            userId,
+            member
+        )
+    ) {
         return null;
     }
 
@@ -671,20 +770,24 @@ async function issueSpamWarning({
         const {
             id,
             totalCount,
-        } = await WarningService.addWarning({
-            guildId,
-            userId,
-            moderatorId: client.user.id,
-            reason,
-            timestamp: Date.now(),
-        });
+        } =
+            await WarningService.addWarning({
+                guildId,
+                userId,
+                moderatorId:
+                    client.user.id,
+                reason,
+                timestamp:
+                    Date.now(),
+            });
 
         const caseId =
             await logModerationAction({
                 client,
                 guild: message.guild,
                 event: {
-                    action: 'User Warned',
+                    action:
+                        'User Warned',
                     target:
                         `${message.author.tag} (${userId})`,
                     executor:
@@ -692,8 +795,10 @@ async function issueSpamWarning({
                     reason,
                     metadata: {
                         userId,
-                        moderatorId: client.user.id,
-                        totalWarns: totalCount,
+                        moderatorId:
+                            client.user.id,
+                        totalWarns:
+                            totalCount,
                         warningNumber,
                         automatic: true,
                         spamOffense:
@@ -728,7 +833,8 @@ async function issueSpamWarning({
                             `**Total Warnings:** ${totalCount}\n` +
                             `**Case ID:** #${caseId || 'N/A'}\n\n` +
                             `⚠️ ${nextAction}`,
-                        color: 'warning',
+                        color:
+                            'warning',
                     }),
                 ],
             });
@@ -768,7 +874,8 @@ function scheduleAutomaticUnban(
     remainingMs,
     client
 ) {
-    const MAX_TIMEOUT = 2147483647;
+    const MAX_TIMEOUT =
+        2147483647;
 
     const timeout =
         Math.min(
@@ -776,49 +883,43 @@ function scheduleAutomaticUnban(
             MAX_TIMEOUT
         );
 
-    setTimeout(async () => {
-        if (remainingMs > MAX_TIMEOUT) {
-            scheduleAutomaticUnban(
-                guildId,
-                userId,
-                remainingMs - MAX_TIMEOUT,
-                client
-            );
-
-            return;
-        }
-
-        try {
-            const guild =
-                client.guilds.cache.get(guildId);
-
-            if (!guild) {
-                logger.warn(
-                    `Could not automatically unban ${userId}: guild ${guildId} not found.`
+    setTimeout(
+        async () => {
+            if (
+                remainingMs >
+                MAX_TIMEOUT
+            ) {
+                scheduleAutomaticUnban(
+                    guildId,
+                    userId,
+                    remainingMs -
+                        MAX_TIMEOUT,
+                    client
                 );
+
                 return;
             }
 
-            await guild.members.unban(
-                userId,
-                'Automatic anti-spam: 30 day ban expired.'
-            );
+            try {
+                const guild =
+                    client.guilds.cache.get(
+                        guildId
+                    );
 
-            logger.info(
-                `Anti-spam: automatically unbanned ${userId} after 30 days.`
-            );
+                if (!guild) {
+                    logger.warn(
+                        `Could not automatically unban ${userId}: guild ${guildId} not found.`
+                    );
+                    return;
+                }
 
-            spamEscalation.delete(
-                `${guildId}:${userId}`
-            );
+                await guild.members.unban(
+                    userId,
+                    'Automatic anti-spam: 30 day ban expired.'
+                );
 
-            spamTracker
-                .get(guildId)
-                ?.delete(userId);
-        } catch (error) {
-            if (error?.code === 10026) {
                 logger.info(
-                    `User ${userId} was already unbanned when automatic unban was attempted.`
+                    `Anti-spam: automatically unbanned ${userId} after 30 days.`
                 );
 
                 spamEscalation.delete(
@@ -828,16 +929,34 @@ function scheduleAutomaticUnban(
                 spamTracker
                     .get(guildId)
                     ?.delete(userId);
+            } catch (error) {
+                if (
+                    error?.code ===
+                    10026
+                ) {
+                    logger.info(
+                        `User ${userId} was already unbanned when automatic unban was attempted.`
+                    );
 
-                return;
+                    spamEscalation.delete(
+                        `${guildId}:${userId}`
+                    );
+
+                    spamTracker
+                        .get(guildId)
+                        ?.delete(userId);
+
+                    return;
+                }
+
+                logger.error(
+                    `Failed to automatically unban ${userId}:`,
+                    error
+                );
             }
-
-            logger.error(
-                `Failed to automatically unban ${userId}:`,
-                error
-            );
-        }
-    }, timeout);
+        },
+        timeout
+    );
 }
 
 // ============================================================
