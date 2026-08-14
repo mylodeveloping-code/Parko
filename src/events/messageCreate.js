@@ -264,6 +264,10 @@ async function handleAntiSpam(message, client) {
         const processingKey =
             `${guildId}:${userId}`;
 
+        /*
+         * Prevent multiple spam punishments from being
+         * processed simultaneously.
+         */
         if (spamProcessing.has(processingKey)) {
             return;
         }
@@ -271,64 +275,149 @@ async function handleAntiSpam(message, client) {
         spamProcessing.add(processingKey);
 
         try {
-            const spamMessages = [...recentMessages];
-
-            /*
-             * Clear the tracker so the next burst is separate.
-             */
-            guildTracker.set(userId, []);
-
             /*
              * =================================================
-             * IDENTICAL SPAM
+             * WAIT FOR THE ENTIRE SPAM WINDOW
              * =================================================
              *
-             * Keep the first message.
-             * Delete every duplicate.
+             * The old system processed immediately when the
+             * 5th message arrived.
+             *
+             * That meant messages #6, #7, #8, etc. could be
+             * missed by the cleanup.
+             *
+             * We now wait until the 3-second window has ended
+             * so the entire burst can be collected.
              */
 
-            const normalizedContents =
-                spamMessages.map(
+            const currentMessages =
+                guildTracker.get(userId) || [];
+
+            const oldestMessage =
+                currentMessages[0];
+
+            if (oldestMessage) {
+                const elapsed =
+                    Date.now() -
+                    oldestMessage.timestamp;
+
+                const remainingTime =
+                    Math.max(
+                        0,
+                        SPAM_WINDOW_MS - elapsed
+                    );
+
+                if (remainingTime > 0) {
+                    await new Promise(
+                        (resolve) =>
+                            setTimeout(
+                                resolve,
+                                remainingTime + 100
+                            )
+                    );
+                }
+            }
+
+            /*
+             * Re-read the tracker after waiting.
+             *
+             * This includes messages that were sent after
+             * message #5 but before the spam window ended.
+             */
+            const currentTime =
+                Date.now();
+
+            const spamMessages =
+                (
+                    guildTracker.get(userId) || []
+                ).filter(
                     (entry) =>
-                        entry.message.content.trim()
+                        currentTime -
+                            entry.timestamp <=
+                        SPAM_WINDOW_MS + 250
                 );
 
-            const firstContent =
-                normalizedContents[0];
+            /*
+             * Clear the tracker now that this burst has
+             * been captured.
+             */
+            guildTracker.set(
+                userId,
+                []
+            );
 
-            const allIdentical =
-                normalizedContents.every(
-                    (content) =>
-                        content === firstContent
-                );
+            /*
+             * =================================================
+             * DELETE DUPLICATE SPAM
+             * =================================================
+             *
+             * Keep ONE copy of every unique message.
+             *
+             * Example:
+             *
+             * anyone have toe pics
+             * anyone have toe pics
+             * anyone have toe pics
+             * v
+             * v
+             * v
+             * b
+             *
+             * Result:
+             *
+             * anyone have toe pics
+             * v
+             * b
+             *
+             * Every duplicate after the first copy is deleted.
+             */
 
-            if (allIdentical) {
-                const messagesToDelete =
-                    spamMessages.slice(1);
+            const seenContents =
+                new Set();
 
-                await Promise.all(
-                    messagesToDelete.map(
-                        (entry) =>
-                            entry.message
-                                .delete()
-                                .catch(() => {})
-                    )
-                );
-            } else {
+            const messagesToDelete = [];
+
+            for (const entry of spamMessages) {
                 /*
-                 * Different messages:
-                 * delete everything.
+                 * Normalize the content so capitalization and
+                 * surrounding spaces don't create separate copies.
                  */
-                await Promise.all(
-                    spamMessages.map(
-                        (entry) =>
-                            entry.message
-                                .delete()
-                                .catch(() => {})
-                    )
+                const content =
+                    entry.message.content
+                        .trim()
+                        .toLowerCase();
+
+                /*
+                 * Keep the first occurrence.
+                 */
+                if (!seenContents.has(content)) {
+                    seenContents.add(content);
+                    continue;
+                }
+
+                /*
+                 * Delete every duplicate occurrence.
+                 */
+                messagesToDelete.push(
+                    entry.message
                 );
             }
 
+            /*
+             * Delete all duplicate messages.
+             */
+            await Promise.all(
+                messagesToDelete.map(
+                    (spamMessage) =>
+                        spamMessage
+                            .delete()
+                            .catch(() => {})
+                )
+            );
+
+            /*
+             * Process the spam offense after the cleanup.
+             */
             await processSpamOffense(
                 message,
                 member,
@@ -499,12 +588,6 @@ async function processSpamOffense(
         const reason =
             'Automatic anti-spam: 5 messages sent within 3 seconds.';
 
-        /*
-         * IMPORTANT:
-         *
-         * Only the user's CURRENT PB Exempt role determines
-         * whether the special PB Exempt DM is shown.
-         */
         await sendSpamDM(
             message.author,
             message.guild,
@@ -536,13 +619,6 @@ async function processSpamOffense(
                         Date.now() +
                         FIRST_TIMEOUT_MS,
 
-                    /*
-                     * Record PB Exempt status at the moment
-                     * the automatic timeout was issued.
-                     *
-                     * Removing the role later does NOT remove
-                     * this state.
-                     */
                     pbExemptAtTimeout:
                         hasPBExemptRole ||
                         (
@@ -852,21 +928,21 @@ async function sendSpamDM(
                     'Manual removal of this timeout before it expires will not escalate on your next spam offense, as you have the "PB Exempt" role.';
             } else {
                 /*
-                 * If they do NOT currently have PB Exempt,
-                 * tell them what their next actual offense
-                 * will result in.
+                 * Normal users:
                  *
-                 * If their previous PB Exempt timeout was
-                 * manually removed early, their punishment
-                 * is still repeated rather than escalated.
+                 * Offense 1 -> next offense is a 1-hour timeout.
+                 * Offense 2 -> next offense is Warning #1.
+                 *
+                 * IMPORTANT:
+                 *
+                 * A PB Exempt user's manually repeated 15-minute
+                 * timeout does NOT receive a misleading
+                 * "another 15-minute timeout" message.
                  */
                 if (
-                    manuallyUnmutedPBExempt &&
-                    offense === 1
+                    offense === 1 &&
+                    !manuallyUnmutedPBExempt
                 ) {
-                    nextAction =
-                        'Further spam will result in another 15-minute timeout.';
-                } else if (offense === 1) {
                     nextAction =
                         'Further spam will normally result in a 1-hour timeout.';
                 } else if (offense === 2) {
