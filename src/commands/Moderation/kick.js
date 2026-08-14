@@ -3,6 +3,7 @@ import { successEmbed } from '../../utils/embeds.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
 import { ModerationService } from '../../services/moderation/moderationService.js';
 import { TitanBotError, ErrorTypes } from '../../utils/errorHandler.js';
+import { isModerationExempt } from '../../utils/moderation.js';
 
 export default {
     data: new SlashCommandBuilder()
@@ -18,12 +19,15 @@ export default {
             option.setName("reason").setDescription("Reason for the kick"),
         )
         .setDefaultMemberPermissions(PermissionFlagsBits.KickMembers),
+
     category: "moderation",
 
     async execute(interaction, config, client) {
         const targetUser = interaction.options.getUser("target");
         const member = interaction.options.getMember("target");
-        const reason = interaction.options.getString("reason") || "No reason provided";
+        const reason =
+            interaction.options.getString("reason") ||
+            "No reason provided";
 
         if (!targetUser) {
             throw new TitanBotError(
@@ -31,6 +35,15 @@ export default {
                 ErrorTypes.USER_INPUT,
                 'You must specify a user to kick.',
                 { subtype: 'invalid_user' },
+            );
+        }
+
+        // Moderation exemption
+        if (isModerationExempt(targetUser.id)) {
+            throw new TitanBotError(
+                "User is moderation exempt",
+                ErrorTypes.VALIDATION,
+                "This user is exempt from all moderation actions.",
             );
         }
 
