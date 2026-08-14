@@ -24,7 +24,7 @@ export const botConfig = {
     activities: [
       {
         name: "Custom Status", // required by Discord API, not shown in the client
-        state: "Made by Park",     // this is what people actually see
+        state: "Don't want to use slash commands? Use the prefix, "."",     // this is what people actually see
         type: 4,               // Custom
       },
     ],
@@ -329,7 +329,7 @@ export const botConfig = {
       // If true, user receives a DM after verification.
       sendDMNotification: true,
 
-      // Human-readable descriptions for each criteria mode.
+      // Human-readable s for each criteria mode.
       criteria: {
         account_age: "Account must be older than specified days",
         server_size: "All users if server has less than 1000 members",
@@ -387,9 +387,9 @@ export const botConfig = {
   // =========================
   counters: {
     defaults: {
-      // Default naming/description templates for counter entries.
+      // Default naming/ templates for counter entries.
       name: "{name} Counter",
-      description: "Server {name} counter",
+      : "Server {name} counter",
       // Channel type used for counters (typically "voice").
       type: "voice",
       // Channel name format. `{count}` is replaced automatically.
@@ -411,18 +411,18 @@ export const botConfig = {
       // Built-in counter types and how each count is calculated.
       members: {
         name: "👥 Members",
-        description: "Total members in the server",
+        : "Total members in the server",
         getCount: (guild) => guild.memberCount.toString(),
       },
       bots: {
         name: "🤖 Bots",
-        description: "Total bot accounts in the server",
+        : "Total bot accounts in the server",
         getCount: (guild) =>
           guild.members.cache.filter((m) => m.user.bot).size.toString(),
       },
       members_only: {
         name: "👤 Humans",
-        description: "Total human members (non-bots)",
+        : "Total human members (non-bots)",
         getCount: (guild) =>
           guild.members.cache.filter((m) => !m.user.bot).size.toString(),
       },
