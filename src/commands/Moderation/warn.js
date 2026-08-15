@@ -179,7 +179,7 @@ export default {
                     warningEmbed(
                         `⚠️ **Warned** ${target.tag}`,
                         `**Reason:** ${reason}\n` +
-                        `**Total Warns:** ${totalCount}\n\n` +
+                        `**Warning #:** ${totalCount}\n\n` +
                         `⚠️ The warning was recorded, but I could not update the warning roles.\n` +
                         `Make sure I have **Manage Roles** permission and that my bot role is above all three warning roles.`
                     ),
@@ -192,13 +192,14 @@ export default {
         /*
          * DM THE WARNED USER
          *
-         * The DM does NOT include the moderator
-         * or total warnings.
+         * The DM does NOT include:
+         * - Moderator
+         * - Total Warnings
          *
          * It displays:
          *
          * Warning #
-         * 3
+         * 1
          */
         try {
             const warningDM = createEmbed({
@@ -277,14 +278,17 @@ export default {
                     deleteMessageSeconds: 0,
                 });
 
-                logger.info(`Banned ${target.tag} for 30 days after third warning`, {
-                    userId: target.id,
-                    guildId,
-                    moderatorId: moderator.id,
-                    warningId: id,
-                    reason,
-                    banDuration: '30 days',
-                });
+                logger.info(
+                    `Banned ${target.tag} for 30 days after third warning`,
+                    {
+                        userId: target.id,
+                        guildId,
+                        moderatorId: moderator.id,
+                        warningId: id,
+                        reason,
+                        banDuration: '30 days',
+                    }
+                );
 
                 // Schedule the unban for 30 days from now.
                 setTimeout(async () => {
@@ -294,11 +298,14 @@ export default {
                             '30-day ban expired after third warning'
                         );
 
-                        logger.info(`Automatically unbanned ${target.tag} after 30 days`, {
-                            userId: target.id,
-                            guildId,
-                            warningId: id,
-                        });
+                        logger.info(
+                            `Automatically unbanned ${target.tag} after 30 days`,
+                            {
+                                userId: target.id,
+                                guildId,
+                                warningId: id,
+                            }
+                        );
                     } catch (unbanError) {
                         logger.error(
                             `Failed to automatically unban ${target.tag} after 30 days`,
@@ -332,8 +339,7 @@ export default {
                 successEmbed(
                     `⚠️ **Warned** ${target.tag}`,
                     `**Reason:** ${reason}\n` +
-                    `**Total Warns:** ${totalCount}\n` +
-                    `**Warning Level:** ${warningLevel}` +
+                    `**Warning #:** ${totalCount}` +
                     (totalCount === 3
                         ? `\n\n🔨 **This was their third warning. They have been banned for 30 days.**`
                         : ''),
