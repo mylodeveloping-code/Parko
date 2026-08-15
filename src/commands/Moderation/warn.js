@@ -1,3 +1,5 @@
+import { getColor } from '../../config/bot.js';
+
 import {
     SlashCommandBuilder,
     PermissionFlagsBits,
@@ -189,38 +191,34 @@ export default {
         /*
          * DM THE WARNED USER
          *
-         * This happens after the warning has successfully been recorded
-         * and the warning roles have been updated.
+         * The DM does NOT include the moderator.
          *
-         * If the user has DMs disabled, the warning still succeeds.
+         * If the user's DMs are disabled, the warning still succeeds.
          */
         try {
             const warningDM = createEmbed({
                 title: '⚠️ You Have Been Warned',
                 description:
                     `You have received a warning in **${interaction.guild.name}**.`,
-            }).addFields(
-                {
-                    name: 'Reason',
-                    value: reason,
-                    inline: false,
-                },
-                {
-                    name: 'Warning',
-                    value: `#${totalCount}`,
-                    inline: true,
-                },
-                {
-                    name: 'Total Warnings',
-                    value: `${totalCount}`,
-                    inline: true,
-                },
-                {
-                    name: 'Moderator',
-                    value: moderator.tag,
-                    inline: true,
-                }
-            ).setColor(getColor('warning'));
+            })
+                .addFields(
+                    {
+                        name: 'Reason',
+                        value: reason,
+                        inline: false,
+                    },
+                    {
+                        name: 'Warning',
+                        value: `#${totalCount}`,
+                        inline: true,
+                    },
+                    {
+                        name: 'Total Warnings',
+                        value: `${totalCount}`,
+                        inline: true,
+                    }
+                )
+                .setColor(getColor('warning'));
 
             await target.send({
                 embeds: [warningDM],
