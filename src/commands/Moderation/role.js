@@ -17,10 +17,10 @@ export default {
                 .setDescription("The user to toggle the role for")
                 .setRequired(true),
         )
-        .addRoleOption((option) =>
+        .addStringOption((option) =>
             option
                 .setName("role")
-                .setDescription("The role to toggle")
+                .setDescription("The name of the role to toggle")
                 .setRequired(true),
         )
         .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles),
@@ -29,7 +29,7 @@ export default {
 
     async execute(interaction, config, client) {
         const target = interaction.options.getMember("target");
-        const role = interaction.options.getRole("role");
+        const roleName = interaction.options.getString("role");
 
         if (!target) {
             throw new TitanBotError(
@@ -40,16 +40,28 @@ export default {
             );
         }
 
-        if (!role) {
+        if (!roleName) {
             throw new TitanBotError(
                 "Missing role",
                 ErrorTypes.USER_INPUT,
-                "You must specify a role.",
+                "You must specify a role name.",
                 { subtype: "invalid_role" },
             );
         }
 
-        // The bot cannot manage @everyone
+        const role = interaction.guild.roles.cache.find(
+            (r) => r.name.toLowerCase() === roleName.toLowerCase(),
+        );
+
+        if (!role) {
+            throw new TitanBotError(
+                "Role not found",
+                ErrorTypes.USER_INPUT,
+                `I couldn't find a role named **${roleName}**.`,
+                { subtype: "role_not_found" },
+            );
+        }
+
         if (role.id === interaction.guild.id) {
             throw new TitanBotError(
                 "Cannot manage everyone role",
@@ -58,7 +70,6 @@ export default {
             );
         }
 
-        // The bot cannot manage managed/integration roles
         if (role.managed) {
             throw new TitanBotError(
                 "Cannot manage managed role",
@@ -67,7 +78,6 @@ export default {
             );
         }
 
-        // Check the bot's role hierarchy
         const botMember = interaction.guild.members.me;
 
         if (!botMember) {
@@ -86,7 +96,6 @@ export default {
             );
         }
 
-        // Check the command user's role hierarchy
         if (
             interaction.member.id !== interaction.guild.ownerId &&
             role.position >= interaction.member.roles.highest.position
@@ -98,28 +107,33 @@ export default {
             );
         }
 
-        // Check whether the target already has the role
         const hasRole = target.roles.cache.has(role.id);
 
         if (hasRole) {
-            await target.roles.remove(role, `Role toggled by ${interaction.user.tag}`);
+            await target.roles.remove(
+                role,
+                `Role toggled by ${interaction.user.tag}`,
+            );
 
             await InteractionHelper.universalReply(interaction, {
                 embeds: [
                     successEmbed(
-                        `➖ **Role Removed**`,
-                        `Removed ${role} from **${target.user.tag}**.`,
+                        "➖ **Role Removed**",
+                        `Removed **${role.name}** from **${target.user.tag}**.`,
                     ),
                 ],
             });
         } else {
-            await target.roles.add(role, `Role toggled by ${interaction.user.tag}`);
+            await target.roles.add(
+                role,
+                `Role toggled by ${interaction.user.tag}`,
+            );
 
             await InteractionHelper.universalReply(interaction, {
                 embeds: [
                     successEmbed(
-                        `➕ **Role Added**`,
-                        `Added ${role} to **${target.user.tag}**.`,
+                        "➕ **Role Added**",
+                        `Added **${role.name}** to **${target.user.tag}**.`,
                     ),
                 ],
             });
