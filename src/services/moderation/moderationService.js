@@ -356,7 +356,6 @@ export class ModerationService {
       // ========================================================
 
       const previousRoleIds = getMemberRoleIds(member);
-
       const expiresAt = Date.now() + durationMs;
 
       const saved = await saveTimeoutRoles({
@@ -413,6 +412,7 @@ export class ModerationService {
             userId: member.id,
             moderatorId: moderator.id,
             durationMs,
+            expiresAt,
             mutedRoleId: '1537615321438093425'
           }
         }
@@ -421,6 +421,70 @@ export class ModerationService {
       logger.info(
         `User timed out and muted: ${member.user.tag} by ${moderator.user.tag} in ${guild.name}`
       );
+
+      // ========================================================
+      // AUTOMATICALLY RESTORE ROLES WHEN TIMEOUT EXPIRES
+      // ========================================================
+
+      setTimeout(async () => {
+        try {
+          const currentMember = await guild.members
+            .fetch(member.id)
+            .catch(() => null);
+
+          if (!currentMember) {
+            logger.warn(
+              `Could not find ${member.user.tag} when timeout expired.`
+            );
+            return;
+          }
+
+          // If /untimeout was already used, the saved roles
+          // have already been restored.
+          if (!currentMember.roles.cache.has('1537615321438093425')) {
+            logger.info(
+              `Timeout for ${currentMember.user.tag} expired, but Muted role was already removed.`
+            );
+            return;
+          }
+
+          const restored = await restoreTimeoutRoles(
+            currentMember
+          );
+
+          if (restored) {
+            logger.info(
+              `Timeout expired automatically: ${currentMember.user.tag} in ${guild.name}. Roles restored.`
+            );
+          } else {
+            logger.warn(
+              `Timeout expired for ${currentMember.user.tag}, but saved roles could not be restored.`
+            );
+          }
+
+          await logModerationAction({
+            client: guild.client,
+            guild,
+            event: {
+              action: 'Member Timeout Expired',
+              target: `${currentMember.user.tag} (${currentMember.id})`,
+              executor: `${guild.client.user.tag} (${guild.client.user.id})`,
+              reason: 'Timeout duration expired',
+              metadata: {
+                userId: currentMember.id,
+                expiresAt,
+                rolesRestored: restored
+              }
+            }
+          });
+
+        } catch (error) {
+          logger.error(
+            `Error automatically removing expired timeout for ${member.user.tag}:`,
+            error
+          );
+        }
+      }, durationMs);
 
       return {
         caseId,
