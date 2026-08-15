@@ -36,6 +36,9 @@ const WARNING_ROLES = {
     3: '1536917870087376936',
 };
 
+// 30 days in milliseconds
+const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
+
 export default {
     data: new SlashCommandBuilder()
         .setName("warn")
@@ -138,8 +141,6 @@ export default {
          *
          * 4+ warnings:
          *   Warning 1 + Warning 2 + Warning 3
-         *
-         * Warning roles are NEVER removed when another warning is added.
          */
 
         const warningLevel = Math.min(totalCount, 3);
@@ -191,14 +192,13 @@ export default {
         /*
          * DM THE WARNED USER
          *
-         * The DM does NOT include the moderator.
+         * The DM does NOT include the moderator
+         * or total warnings.
          *
-         * The warning number is displayed as:
+         * It displays:
          *
          * Warning #
-         * 1
-         *
-         * If the user's DMs are disabled, the warning still succeeds.
+         * 3
          */
         try {
             const warningDM = createEmbed({
@@ -214,11 +214,6 @@ export default {
                     },
                     {
                         name: 'Warning #',
-                        value: `${totalCount}`,
-                        inline: true,
-                    },
-                    {
-                        name: 'Total Warnings',
                         value: `${totalCount}`,
                         inline: true,
                     }
@@ -269,6 +264,68 @@ export default {
             },
         });
 
+        /*
+         * THIRD WARNING = 30-DAY BAN
+         *
+         * The third warning gives the Warning 3 role,
+         * then bans the user for 30 days.
+         */
+        if (totalCount === 3) {
+            try {
+                await interaction.guild.members.ban(target.id, {
+                    reason: `Third warning - ${reason}`,
+                    deleteMessageSeconds: 0,
+                });
+
+                logger.info(`Banned ${target.tag} for 30 days after third warning`, {
+                    userId: target.id,
+                    guildId,
+                    moderatorId: moderator.id,
+                    warningId: id,
+                    reason,
+                    banDuration: '30 days',
+                });
+
+                // Schedule the unban for 30 days from now.
+                setTimeout(async () => {
+                    try {
+                        await interaction.guild.members.unban(
+                            target.id,
+                            '30-day ban expired after third warning'
+                        );
+
+                        logger.info(`Automatically unbanned ${target.tag} after 30 days`, {
+                            userId: target.id,
+                            guildId,
+                            warningId: id,
+                        });
+                    } catch (unbanError) {
+                        logger.error(
+                            `Failed to automatically unban ${target.tag} after 30 days`,
+                            {
+                                userId: target.id,
+                                guildId,
+                                warningId: id,
+                                error: unbanError,
+                            }
+                        );
+                    }
+                }, THIRTY_DAYS);
+
+            } catch (banError) {
+                logger.error(
+                    `Failed to ban ${target.tag} after third warning`,
+                    {
+                        userId: target.id,
+                        guildId,
+                        moderatorId: moderator.id,
+                        warningId: id,
+                        error: banError,
+                    }
+                );
+            }
+        }
+
         // Success response
         await InteractionHelper.safeEditReply(interaction, {
             embeds: [
@@ -276,7 +333,10 @@ export default {
                     `⚠️ **Warned** ${target.tag}`,
                     `**Reason:** ${reason}\n` +
                     `**Total Warns:** ${totalCount}\n` +
-                    `**Warning Level:** ${warningLevel}`,
+                    `**Warning Level:** ${warningLevel}` +
+                    (totalCount === 3
+                        ? `\n\n🔨 **This was their third warning. They have been banned for 30 days.**`
+                        : ''),
                 ),
             ],
         });
