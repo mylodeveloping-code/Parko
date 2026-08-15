@@ -173,7 +173,6 @@ export default {
                 error: roleError,
             });
 
-            // The warning was still successfully recorded.
             await InteractionHelper.safeEditReply(interaction, {
                 embeds: [
                     warningEmbed(
@@ -190,93 +189,21 @@ export default {
         }
 
         /*
-         * DM THE WARNED USER
-         *
-         * The DM does NOT include:
-         * - Moderator
-         * - Total Warnings
-         *
-         * It displays:
-         *
-         * Warning #
-         * 1
-         */
-        try {
-            const warningDM = createEmbed({
-                title: '⚠️ You Have Been Warned',
-                description:
-                    `You have received a warning in **${interaction.guild.name}**.`,
-            })
-                .addFields(
-                    {
-                        name: 'Reason',
-                        value: reason,
-                        inline: false,
-                    },
-                    {
-                        name: 'Warning #',
-                        value: `${totalCount}`,
-                        inline: true,
-                    }
-                )
-                .setColor(getColor('warning'));
-
-            await target.send({
-                embeds: [warningDM],
-            });
-
-            logger.info(`Sent warning DM to ${target.tag}`, {
-                userId: target.id,
-                guildId,
-                warningId: id,
-                warningNumber: totalCount,
-            });
-        } catch (dmError) {
-            // DMs being disabled should NOT cause the warning to fail.
-            logger.warn(`Could not DM ${target.tag} about their warning`, {
-                userId: target.id,
-                guildId,
-                warningId: id,
-                error: dmError,
-            });
-        }
-
-        // Log the moderation action
-        await logModerationAction({
-            client,
-            guild: interaction.guild,
-            event: {
-                action: "User Warned",
-                target: `${target.tag} (${target.id})`,
-                executor: `${moderator.tag} (${moderator.id})`,
-                reason,
-                metadata: {
-                    userId: target.id,
-                    moderatorId: moderator.id,
-                    totalWarns: totalCount,
-                    warningNumber: totalCount,
-                    warningLevel,
-                    warningId: id,
-                    warningRoles: Object.values(WARNING_ROLES).slice(
-                        0,
-                        warningLevel
-                    ),
-                },
-            },
-        });
-
-        /*
          * THIRD WARNING = 30-DAY BAN
          *
-         * The third warning gives the Warning 3 role,
-         * then bans the user for 30 days.
+         * Ban the user BEFORE sending the DM so the DM can
+         * accurately tell them that they have been banned.
          */
+        let wasBanned = false;
+
         if (totalCount === 3) {
             try {
                 await interaction.guild.members.ban(target.id, {
                     reason: `Third warning - ${reason}`,
                     deleteMessageSeconds: 0,
                 });
+
+                wasBanned = true;
 
                 logger.info(
                     `Banned ${target.tag} for 30 days after third warning`,
@@ -333,14 +260,116 @@ export default {
             }
         }
 
+        /*
+         * DM THE WARNED USER
+         *
+         * First and second warning:
+         *   You Have Been Warned
+         *
+         * Third warning:
+         *   You Have Been Banned
+         *   You have been banned for 30 days.
+         */
+        try {
+            let warningDM;
+
+            if (totalCount === 3 && wasBanned) {
+                warningDM = createEmbed({
+                    title: '🔨 You Have Been Banned',
+                    description:
+                        `You have received your third warning in **${interaction.guild.name}**.\n\n` +
+                        `You have been **banned for 30 days**.`,
+                })
+                    .addFields(
+                        {
+                            name: 'Reason',
+                            value: reason,
+                            inline: false,
+                        },
+                        {
+                            name: 'Warning #',
+                            value: `${totalCount}`,
+                            inline: true,
+                        }
+                    )
+                    .setColor(getColor('error'));
+            } else {
+                warningDM = createEmbed({
+                    title: '⚠️ You Have Been Warned',
+                    description:
+                        `You have received a warning in **${interaction.guild.name}**.`,
+                })
+                    .addFields(
+                        {
+                            name: 'Reason',
+                            value: reason,
+                            inline: false,
+                        },
+                        {
+                            name: 'Warning #',
+                            value: `${totalCount}`,
+                            inline: true,
+                        }
+                    )
+                    .setColor(getColor('warning'));
+            }
+
+            await target.send({
+                embeds: [warningDM],
+            });
+
+            logger.info(`Sent warning DM to ${target.tag}`, {
+                userId: target.id,
+                guildId,
+                warningId: id,
+                warningNumber: totalCount,
+                wasBanned,
+            });
+
+        } catch (dmError) {
+            logger.warn(`Could not DM ${target.tag} about their warning`, {
+                userId: target.id,
+                guildId,
+                warningId: id,
+                error: dmError,
+            });
+        }
+
+        // Log the moderation action
+        await logModerationAction({
+            client,
+            guild: interaction.guild,
+            event: {
+                action: "User Warned",
+                target: `${target.tag} (${target.id})`,
+                executor: `${moderator.tag} (${moderator.id})`,
+                reason,
+                metadata: {
+                    userId: target.id,
+                    moderatorId: moderator.id,
+                    totalWarns: totalCount,
+                    warningNumber: totalCount,
+                    warningLevel,
+                    warningId: id,
+                    warningRoles: Object.values(WARNING_ROLES).slice(
+                        0,
+                        warningLevel
+                    ),
+                    bannedFor30Days: wasBanned,
+                },
+            },
+        });
+
         // Success response
         await InteractionHelper.safeEditReply(interaction, {
             embeds: [
                 successEmbed(
-                    `⚠️ **Warned** ${target.tag}`,
+                    totalCount === 3 && wasBanned
+                        ? `🔨 **Banned** ${target.tag}`
+                        : `⚠️ **Warned** ${target.tag}`,
                     `**Reason:** ${reason}\n` +
                     `**Warning #:** ${totalCount}` +
-                    (totalCount === 3
+                    (totalCount === 3 && wasBanned
                         ? `\n\n🔨 **This was their third warning. They have been banned for 30 days.**`
                         : ''),
                 ),
