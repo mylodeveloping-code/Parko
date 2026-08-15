@@ -186,6 +186,62 @@ export default {
             return;
         }
 
+        /*
+         * DM THE WARNED USER
+         *
+         * This happens after the warning has successfully been recorded
+         * and the warning roles have been updated.
+         *
+         * If the user has DMs disabled, the warning still succeeds.
+         */
+        try {
+            const warningDM = createEmbed({
+                title: '⚠️ You Have Been Warned',
+                description:
+                    `You have received a warning in **${interaction.guild.name}**.`,
+            }).addFields(
+                {
+                    name: 'Reason',
+                    value: reason,
+                    inline: false,
+                },
+                {
+                    name: 'Warning',
+                    value: `#${totalCount}`,
+                    inline: true,
+                },
+                {
+                    name: 'Total Warnings',
+                    value: `${totalCount}`,
+                    inline: true,
+                },
+                {
+                    name: 'Moderator',
+                    value: moderator.tag,
+                    inline: true,
+                }
+            ).setColor(getColor('warning'));
+
+            await target.send({
+                embeds: [warningDM],
+            });
+
+            logger.info(`Sent warning DM to ${target.tag}`, {
+                userId: target.id,
+                guildId,
+                warningId: id,
+                warningNumber: totalCount,
+            });
+        } catch (dmError) {
+            // DMs being disabled should NOT cause the warning to fail.
+            logger.warn(`Could not DM ${target.tag} about their warning`, {
+                userId: target.id,
+                guildId,
+                warningId: id,
+                error: dmError,
+            });
+        }
+
         // Log the moderation action
         await logModerationAction({
             client,
