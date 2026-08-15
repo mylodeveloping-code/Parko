@@ -120,7 +120,20 @@ class TitanBot extends Client {
       startupLog('Attempting Discord login...');
 
       try {
-        await this.login(token);
+        await Promise.race([
+          this.login(token),
+
+          new Promise((_, reject) => {
+            setTimeout(() => {
+              reject(
+                new Error(
+                  'Discord login timed out after 30 seconds. The bot could not establish a connection to Discord.'
+                )
+              );
+            }, 30000);
+          }),
+        ]);
+
         startupLog('Discord login successful');
       } catch (loginError) {
         logger.error(
