@@ -26,16 +26,17 @@ export default {
                 .setDescription("User to timeout")
                 .setRequired(true),
         )
-        .addIntegerOption(
-            (option) =>
-                option
-                    .setName("duration")
-                    .setDescription("Duration of the timeout")
-                    .setRequired(true)
-                    .addChoices(...durationChoices),
+        .addIntegerOption((option) =>
+            option
+                .setName("duration")
+                .setDescription("Duration of the timeout")
+                .setRequired(true)
+                .addChoices(...durationChoices),
         )
         .addStringOption((option) =>
-            option.setName("reason").setDescription("Reason for the timeout"),
+            option
+                .setName("reason")
+                .setDescription("Reason for the timeout"),
         )
         .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers),
 
@@ -48,7 +49,7 @@ export default {
             logger.warn(`Timeout interaction defer failed`, {
                 userId: interaction.user.id,
                 guildId: interaction.guildId,
-                commandName: 'timeout',
+                commandName: "timeout",
             });
             return;
         }
@@ -62,14 +63,13 @@ export default {
 
         if (!targetUser) {
             throw new TitanBotError(
-                'Missing target user',
+                "Missing target user",
                 ErrorTypes.USER_INPUT,
-                'You must specify a user to timeout.',
-                { subtype: 'invalid_user' },
+                "You must specify a user to timeout.",
+                { subtype: "invalid_user" },
             );
         }
 
-        // Moderation exemption
         if (isModerationExempt(targetUser.id)) {
             throw new TitanBotError(
                 "User is moderation exempt",
@@ -114,7 +114,7 @@ export default {
 
         const durationDisplay =
             durationChoices.find(
-                (c) => c.value === durationMinutes
+                (choice) => choice.value === durationMinutes
             )?.name || `${durationMinutes} minutes`;
 
         await InteractionHelper.safeEditReply(interaction, {
