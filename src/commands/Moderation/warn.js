@@ -193,6 +193,11 @@ export default {
          *
          * The DM does NOT include the moderator.
          *
+         * The warning number is displayed as:
+         *
+         * Warning #
+         * 1
+         *
          * If the user's DMs are disabled, the warning still succeeds.
          */
         try {
@@ -208,8 +213,8 @@ export default {
                         inline: false,
                     },
                     {
-                        name: 'Warning',
-                        value: `#${totalCount}`,
+                        name: 'Warning #',
+                        value: `${totalCount}`,
                         inline: true,
                     },
                     {
