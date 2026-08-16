@@ -60,11 +60,7 @@ export default {
 
     const channel = interaction.channel;
 
-    if (
-      !Number.isInteger(amount) ||
-      amount < 1 ||
-      amount > 100
-    ) {
+    if (amount < 1 || amount > 100) {
       return await replyUserError(interaction, {
         type: ErrorTypes.VALIDATION,
         message:
@@ -73,41 +69,18 @@ export default {
     }
 
     try {
-      // ----------------------------------------------------------
-      // /purge ONLY
-      //
-      // There is no prefix command message here.
-      // Simply delete the requested number of messages.
-      // ----------------------------------------------------------
+      // /purge simply deletes the requested number
+      // of messages. There is no command message
+      // that needs to be skipped.
 
       const fetched =
         await channel.messages.fetch({
           limit: amount,
         });
 
-      const messages =
-        [...fetched.values()].slice(0, amount);
-
-      if (messages.length === 0) {
-        await InteractionHelper.safeEditReply(
-          interaction,
-          {
-            embeds: [
-              successEmbed(
-                'Messages Purged',
-                'There were no messages to delete.'
-              ),
-            ],
-            flags: MessageFlags.Ephemeral,
-          }
-        );
-
-        return;
-      }
-
       const deleted =
         await channel.bulkDelete(
-          messages,
+          fetched,
           true
         );
 
@@ -151,13 +124,9 @@ export default {
       setTimeout(() => {
         interaction
           .deleteReply()
-          .catch((error) => {
-            logger.debug(
-              'Failed to auto-delete purge response:',
-              error
-            );
-          });
+          .catch(() => {});
       }, 3000);
+
     } catch (error) {
       logger.error(
         'Slash purge command error:',
@@ -177,17 +146,9 @@ export default {
   // ============================================================
 
   async messageExecute(message, args, client) {
-    if (
-      !message ||
-      !message.channel ||
-      !message.guild
-    ) {
+    if (!message || !message.channel) {
       return;
     }
-
-    // ----------------------------------------------------------
-    // Get the amount
-    // ----------------------------------------------------------
 
     const amount = Number(
       Array.isArray(args)
@@ -203,56 +164,48 @@ export default {
       return;
     }
 
-    const channel =
-      message.channel;
+    const channel = message.channel;
 
     try {
-      // ========================================================
-      // IMPORTANT
-      // ========================================================
-      //
-      // "before: message.id" guarantees that the .purge
-      // command itself CANNOT be included in the messages
-      // being deleted.
-      //
-      // Example:
-      //
-      // Message A
-      // Message B
-      // Message C
-      // Message D
-      // Message E
-      // .purge 5
-      //
-      // The five messages above are deleted.
-      // The .purge 5 message stays until AFTER the deletion.
-      // ========================================================
+      /*
+       * IMPORTANT:
+       *
+       * We DO NOT fetch the newest messages normally.
+       *
+       * We specifically ask Discord for messages BEFORE
+       * the .purge command's message ID.
+       *
+       * Therefore the .purge message itself can NEVER
+       * be included in the purge.
+       */
 
-      const fetched =
+      const messagesBeforeCommand =
         await channel.messages.fetch({
           limit: amount,
           before: message.id,
         });
 
-      // Discord returns newest -> oldest.
-      // Take exactly the requested amount.
+      /*
+       * Discord returns newest -> oldest.
+       *
+       * We only want the exact number requested.
+       */
+
       const messagesToDelete =
-        [...fetched.values()]
-          .filter(
-            (msg) =>
-              msg.id !== message.id
-          )
-          .slice(0, amount);
+        messagesBeforeCommand.first(amount);
+
+      /*
+       * ========================================================
+       * STEP 1:
+       * DELETE THE REQUESTED MESSAGES
+       * ========================================================
+       *
+       * The .purge message is NOT in this collection.
+       */
 
       let deletedCount = 0;
 
-      // ========================================================
-      // DELETE THE REQUESTED MESSAGES FIRST
-      // ========================================================
-
-      if (
-        messagesToDelete.length > 0
-      ) {
+      if (messagesToDelete.length > 0) {
         const deleted =
           await channel.bulkDelete(
             messagesToDelete,
@@ -263,58 +216,55 @@ export default {
           deleted.size;
       }
 
-      logger.info(
-        `Prefix purge: deleted ${deletedCount} messages before ${message.author.tag}'s .purge command.`
-      );
-
-      // ========================================================
-      // REACT TO .PURGE
-      // ========================================================
+      /*
+       * ========================================================
+       * STEP 2:
+       * REACT TO THE .purge MESSAGE
+       * ========================================================
+       */
 
       try {
         await message.react('👍');
-
-        logger.info(
-          `Prefix purge: reacted to .purge command from ${message.author.tag}.`
-        );
       } catch (error) {
         logger.warn(
-          'Prefix purge: failed to react to purge command:',
+          'Could not react to .purge message:',
           error
         );
       }
 
-      // ========================================================
-      // WAIT 2 SECONDS
-      // ========================================================
+      /*
+       * ========================================================
+       * STEP 3:
+       * WAIT 2 SECONDS
+       * ========================================================
+       */
 
-      await new Promise(
-        (resolve) =>
-          setTimeout(resolve, 2000)
+      await new Promise((resolve) =>
+        setTimeout(resolve, 2000)
       );
 
-      // ========================================================
-      // DELETE .PURGE COMMAND
-      // ========================================================
+      /*
+       * ========================================================
+       * STEP 4:
+       * DELETE THE .purge MESSAGE
+       * ========================================================
+       */
 
       try {
-        if (message.deletable) {
-          await message.delete();
-
-          logger.info(
-            `Prefix purge: deleted .purge command from ${message.author.tag}.`
-          );
-        }
+        await message.delete();
       } catch (error) {
         logger.warn(
-          'Prefix purge: failed to delete purge command:',
+          'Could not delete .purge message:',
           error
         );
       }
 
-      // ========================================================
-      // LOG
-      // ========================================================
+      /*
+       * ========================================================
+       * STEP 5:
+       * LOG
+       * ========================================================
+       */
 
       await logEvent({
         client,
@@ -332,23 +282,15 @@ export default {
             `Deleted ${deletedCount} messages`,
 
           metadata: {
-            channelId:
-              channel.id,
-
-            messageCount:
-              deletedCount,
-
-            requestedAmount:
-              amount,
-
-            moderatorId:
-              message.author.id,
-
-            commandType:
-              'prefix',
+            channelId: channel.id,
+            messageCount: deletedCount,
+            requestedAmount: amount,
+            moderatorId: message.author.id,
+            commandType: 'prefix',
           },
         },
       });
+
     } catch (error) {
       logger.error(
         'Prefix purge command error:',
