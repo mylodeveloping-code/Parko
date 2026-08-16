@@ -1,57 +1,57 @@
-import { PermissionFlagsBits } from 'discord.js';
+import {
+    SlashCommandBuilder,
+    PermissionFlagsBits,
+} from 'discord.js';
+
 import {
     addToBlacklist,
-    removeFromBlacklist,
     isBlacklisted,
 } from '../../utils/blacklist.js';
 
 export default {
-    name: 'bl',
-    aliases: ['blacklist'],
+    data: new SlashCommandBuilder()
+        .setName('bl')
+        .setDescription('Blacklist a user from using the bot')
+        .addStringOption((option) =>
+            option
+                .setName('user_id')
+                .setDescription('The Discord user ID to blacklist')
+                .setRequired(true)
+        )
+        .setDefaultMemberPermissions(
+            PermissionFlagsBits.Administrator
+        ),
+
     category: 'moderation',
 
-    async execute(message, args) {
-        // Only administrators can use .bl
-        if (
-            !message.member.permissions.has(
-                PermissionFlagsBits.Administrator
-            )
-        ) {
-            return;
-        }
-
-        const userId = args[0];
+    async execute(interaction, config, client) {
+        const userId =
+            interaction.options.getString('user_id');
 
         if (!userId) {
-            await message.channel.send(
+            await interaction.reply(
                 'Usage: `.bl <user ID>`'
             );
             return;
         }
 
-        // Make sure the ID looks like a Discord user ID
         if (!/^\d{17,20}$/.test(userId)) {
-            await message.channel.send(
+            await interaction.reply(
                 'Please provide a valid Discord user ID.'
             );
             return;
         }
 
-        // If already blacklisted, remove them
         if (isBlacklisted(userId)) {
-            removeFromBlacklist(userId);
-
-            await message.channel.send(
-                `<@${userId}> has been removed from the blacklist.`
+            await interaction.reply(
+                `<@${userId}> is already blacklisted.`
             );
-
             return;
         }
 
-        // Otherwise, add them
         addToBlacklist(userId);
 
-        await message.channel.send(
+        await interaction.reply(
             `<@${userId}> has been added to the blacklist.`
         );
     },

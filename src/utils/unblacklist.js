@@ -1,41 +1,49 @@
-import { PermissionFlagsBits } from 'discord.js';
-import { removeFromBlacklist, isBlacklisted } from '../../utils/blacklist.js';
+import {
+    SlashCommandBuilder,
+    PermissionFlagsBits,
+} from 'discord.js';
+
+import {
+    removeFromBlacklist,
+    isBlacklisted,
+} from '../../utils/blacklist.js';
 
 export default {
-    name: 'unbl',
-    aliases: ['unblacklist'],
+    data: new SlashCommandBuilder()
+        .setName('unbl')
+        .setDescription('Remove a user from the bot blacklist')
+        .addStringOption((option) =>
+            option
+                .setName('user_id')
+                .setDescription('The Discord user ID to unblacklist')
+                .setRequired(true)
+        )
+        .setDefaultMemberPermissions(
+            PermissionFlagsBits.Administrator
+        ),
+
     category: 'moderation',
 
-    async execute(message, args) {
-        // Only administrators can use .unbl
-        if (
-            !message.member.permissions.has(
-                PermissionFlagsBits.Administrator
-            )
-        ) {
-            return;
-        }
-
-        const userId = args[0];
+    async execute(interaction, config, client) {
+        const userId =
+            interaction.options.getString('user_id');
 
         if (!userId) {
-            await message.channel.send(
+            await interaction.reply(
                 'Usage: `.unbl <user ID>`'
             );
             return;
         }
 
-        // Make sure the ID looks like a Discord user ID
         if (!/^\d{17,20}$/.test(userId)) {
-            await message.channel.send(
+            await interaction.reply(
                 'Please provide a valid Discord user ID.'
             );
             return;
         }
 
-        // Make sure the user is actually blacklisted
         if (!isBlacklisted(userId)) {
-            await message.channel.send(
+            await interaction.reply(
                 `<@${userId}> is not currently blacklisted.`
             );
             return;
@@ -43,7 +51,7 @@ export default {
 
         removeFromBlacklist(userId);
 
-        await message.channel.send(
+        await interaction.reply(
             `<@${userId}> has been removed from the blacklist.`
         );
     },
