@@ -6,7 +6,7 @@ export class GuildMusicData {
         this.playerChannelId = null;
         this.autoplay = false;
         this.loop = 'none';
-        this.volume = 30;
+        this.volume = 25;
         this.shuffle = false;
         this.previousTracks = [];
         this.twentyFourSeven = false;
