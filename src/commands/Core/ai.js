@@ -31,13 +31,10 @@ export default {
   category: 'core',
 
   async execute(interaction) {
-    const question =
-      interaction.options.getString('question');
+    const question = interaction.options.getString('question');
 
     if (!process.env.OPENAI_API_KEY) {
-      logger.error(
-        'OPENAI_API_KEY is not configured.'
-      );
+      logger.error('OPENAI_API_KEY is not configured.');
 
       return await replyUserError(interaction, {
         type: ErrorTypes.UNKNOWN,
@@ -47,38 +44,33 @@ export default {
     }
 
     const deferSuccess =
-      await InteractionHelper.safeDefer(
-        interaction,
-        {
-          flags: MessageFlags.Ephemeral,
-        }
-      );
+      await InteractionHelper.safeDefer(interaction, {
+        flags: MessageFlags.Ephemeral,
+      });
 
     if (!deferSuccess) {
-      logger.warn(
-        'AI interaction defer failed',
-        {
-          userId: interaction.user.id,
-          guildId: interaction.guildId,
-        }
-      );
+      logger.warn('AI interaction defer failed', {
+        userId: interaction.user.id,
+        guildId: interaction.guildId,
+      });
 
       return;
     }
 
     try {
-      const response =
-        await openai.responses.create({
-          model: 'gpt-5-mini',
+      const response = await openai.responses.create({
+        model: 'gpt-5-mini',
+        input: [
+          {
+            role: 'user',
+            content: question,
+          },
+        ],
+        instructions:
+          'You are the AI assistant for a Discord bot. Give helpful, accurate, concise answers. Do not claim to have abilities you do not have.',
+      });
 
-          instructions:
-            'You are the AI assistant for a Discord bot. Give helpful, accurate, concise answers. Do not claim to have abilities you do not have.',
-
-          input: question,
-        });
-
-      const answer =
-        response.output_text?.trim();
+      const answer = response.output_text?.trim();
 
       if (!answer) {
         throw new Error(
@@ -89,23 +81,14 @@ export default {
       // Discord messages have a 2000-character limit.
       const chunks = [];
 
-      for (
-        let i = 0;
-        i < answer.length;
-        i += 1900
-      ) {
-        chunks.push(
-          answer.substring(i, i + 1900)
-        );
+      for (let i = 0; i < answer.length; i += 1900) {
+        chunks.push(answer.substring(i, i + 1900));
       }
 
-      await InteractionHelper.safeEditReply(
-        interaction,
-        {
-          content: chunks[0],
-          flags: MessageFlags.Ephemeral,
-        }
-      );
+      await InteractionHelper.safeEditReply(interaction, {
+        content: chunks[0],
+        flags: MessageFlags.Ephemeral,
+      });
 
       for (let i = 1; i < chunks.length; i++) {
         await interaction.followUp({
@@ -114,10 +97,13 @@ export default {
         });
       }
     } catch (error) {
-      logger.error(
-        'AI command error:',
-        error
-      );
+      logger.error('AI command error', {
+        error: error?.message || error,
+        status: error?.status,
+        code: error?.code,
+        type: error?.type,
+        requestId: error?.request_id,
+      });
 
       await replyUserError(interaction, {
         type: ErrorTypes.UNKNOWN,
