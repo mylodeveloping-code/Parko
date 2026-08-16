@@ -17,10 +17,14 @@ export const botConfig = {
       process.env.OWNER_IDS?.split(",")
         .map((id) => id.trim())
         .filter(Boolean) || [],
+
     defaultCooldown: 3,
     deleteCommands: false,
     testGuildId: process.env.TEST_GUILD_ID,
     maintenanceMode: process.env.MAINTENANCE_MODE === "true",
+
+    // Default prefix used when a server has not configured
+    // its own prefix.
     prefix: process.env.PREFIX || ".",
   },
 
@@ -197,7 +201,8 @@ export const botConfig = {
 
       criteria: {
         account_age: "Account must be older than specified days",
-        server_size: "All users if server has less than 1000 members",
+        server_size:
+          "All users if server has less than 1000 members",
         none: "All users immediately",
       },
     },
@@ -255,26 +260,42 @@ export const botConfig = {
         name: "🤖 Bots",
         description: "Total bot accounts in the server",
         getCount: (guild) =>
-          guild.members.cache.filter((m) => m.user.bot).size.toString(),
+          guild.members.cache
+            .filter((m) => m.user.bot)
+            .size
+            .toString(),
       },
 
       members_only: {
         name: "👤 Humans",
         description: "Total human members (non-bots)",
         getCount: (guild) =>
-          guild.members.cache.filter((m) => !m.user.bot).size.toString(),
+          guild.members.cache
+            .filter((m) => !m.user.bot)
+            .size
+            .toString(),
       },
     },
   },
 
   messages: {
-    noPermission: "You do not have permission to use this command.",
-    cooldownActive: "Please wait {time} before using this command again.",
-    errorOccurred: "An error occurred while executing the command.",
+    noPermission:
+      "You do not have permission to use this command.",
+
+    cooldownActive:
+      "Please wait {time} before using this command again.",
+
+    errorOccurred:
+      "An error occurred while executing the command.",
+
     missingPermissions:
       "I am missing required permissions to perform this action.",
-    commandDisabled: "This command has been disabled.",
-    maintenanceMode: "The bot is currently in maintenance mode.",
+
+    commandDisabled:
+      "This command has been disabled.",
+
+    maintenanceMode:
+      "The bot is currently in maintenance mode.",
   },
 
   features: {
@@ -305,11 +326,17 @@ export function validateConfig(config) {
 
   if (process.env.NODE_ENV !== "production") {
     logger.debug("Environment variables check:");
-    logger.debug("DISCORD_TOKEN exists:", !!process.env.DISCORD_TOKEN);
+    logger.debug(
+      "DISCORD_TOKEN exists:",
+      !!process.env.DISCORD_TOKEN
+    );
     logger.debug("TOKEN exists:", !!process.env.TOKEN);
     logger.debug("CLIENT_ID exists:", !!process.env.CLIENT_ID);
     logger.debug("GUILD_ID exists:", !!process.env.GUILD_ID);
-    logger.debug("POSTGRES_HOST exists:", !!process.env.POSTGRES_HOST);
+    logger.debug(
+      "POSTGRES_HOST exists:",
+      !!process.env.POSTGRES_HOST
+    );
     logger.debug("NODE_ENV:", process.env.NODE_ENV);
   }
 
@@ -327,7 +354,8 @@ export function validateConfig(config) {
 
   if (process.env.NODE_ENV === "production") {
     const hasConnectionUrl = Boolean(
-      process.env.POSTGRES_URL || process.env.DATABASE_URL
+      process.env.POSTGRES_URL ||
+        process.env.DATABASE_URL
     );
 
     if (!hasConnectionUrl) {
@@ -421,7 +449,9 @@ export function isMaintenanceMode() {
 export function getBotMessage(key, replacements = {}) {
   let message = botConfig.messages?.[key] || key;
 
-  for (const [placeholder, value] of Object.entries(replacements)) {
+  for (const [placeholder, value] of Object.entries(
+    replacements
+  )) {
     message = message.replace(
       new RegExp(`\\{${placeholder}\\}`, "g"),
       String(value)
@@ -446,7 +476,8 @@ export function isCommandCategoryEnabled(category) {
     return true;
   }
 
-  const featureKey = COMMAND_CATEGORY_FEATURE_MAP[normalized];
+  const featureKey =
+    COMMAND_CATEGORY_FEATURE_MAP[normalized];
 
   if (!featureKey) {
     return true;
@@ -456,7 +487,9 @@ export function isCommandCategoryEnabled(category) {
 }
 
 export function getApplicationStatusColor(status) {
-  const colors = botConfig.applications?.statusColors || {};
+  const colors =
+    botConfig.applications?.statusColors || {};
+
   const hex = colors[status];
 
   return hex
@@ -471,43 +504,70 @@ export function getApplicationStatusColor(status) {
 }
 
 export function getDefaultApplicationQuestions() {
-  return (botConfig.applications?.defaultQuestions || [])
+  return (
+    botConfig.applications?.defaultQuestions || []
+  )
     .map((entry) =>
-      typeof entry === "string" ? entry : entry.question
+      typeof entry === "string"
+        ? entry
+        : entry.question
     )
     .filter(Boolean);
 }
 
-export function getColor(path, fallback = "#99AAB5") {
+export function getColor(
+  path,
+  fallback = "#99AAB5"
+) {
   if (typeof path === "number") {
     return path;
   }
 
-  if (typeof path === "string" && path.startsWith("#")) {
-    return parseInt(path.replace("#", ""), 16);
+  if (
+    typeof path === "string" &&
+    path.startsWith("#")
+  ) {
+    return parseInt(
+      path.replace("#", ""),
+      16
+    );
   }
 
   const result = path
     .split(".")
     .reduce(
       (obj, key) =>
-        obj && obj[key] !== undefined ? obj[key] : fallback,
+        obj && obj[key] !== undefined
+          ? obj[key]
+          : fallback,
       botConfig.embeds.colors
     );
 
-  if (typeof result === "string" && result.startsWith("#")) {
-    return parseInt(result.replace("#", ""), 16);
+  if (
+    typeof result === "string" &&
+    result.startsWith("#")
+  ) {
+    return parseInt(
+      result.replace("#", ""),
+      16
+    );
   }
 
   return result;
 }
 
 export function getRandomColor() {
-  const colors = Object.values(botConfig.embeds.colors).flatMap((color) =>
-    typeof color === "string" ? color : Object.values(color)
+  const colors = Object.values(
+    botConfig.embeds.colors
+  ).flatMap((color) =>
+    typeof color === "string"
+      ? color
+      : Object.values(color)
   );
 
-  return colors[Math.floor(Math.random() * colors.length)];
+  return colors[
+    Math.floor(Math.random() * colors.length)
+  ];
 }
 
 export default botConfig;

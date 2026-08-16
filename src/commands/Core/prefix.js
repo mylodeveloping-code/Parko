@@ -32,7 +32,6 @@ export default {
     usage: '[prefix]',
 
     async execute(interaction, config, client) {
-        // Only the bot owner can use this command.
         if (interaction.user.id !== OWNER_ID) {
             throw new TitanBotError(
                 'Missing permission',
@@ -41,6 +40,17 @@ export default {
                 {
                     subtype: 'prefix_owner_only',
                     userId: interaction.user.id,
+                },
+            );
+        }
+
+        if (!interaction.guild) {
+            throw new TitanBotError(
+                'Guild required',
+                ErrorTypes.USER_INPUT,
+                'This command can only be used inside a server.',
+                {
+                    subtype: 'guild_required',
                 },
             );
         }
@@ -60,7 +70,6 @@ export default {
                 },
             );
 
-        // /prefix with no argument = show current prefix.
         if (newPrefix === null) {
             const embed =
                 new EmbedBuilder()
@@ -77,8 +86,7 @@ export default {
             return;
         }
 
-        const prefix =
-            newPrefix.trim();
+        const prefix = newPrefix.trim();
 
         if (!prefix) {
             throw new TitanBotError(
