@@ -88,7 +88,7 @@ function parseSeekTime(input) {
         }
     }
 
-    // Also support MM:SS and HH:MM:SS.
+    // MM:SS or HH:MM:SS.
     if (!matched && /^\d+(?::\d{1,2}){1,2}$/.test(value)) {
         const parts = value.split(':').map(Number);
 
@@ -103,7 +103,8 @@ function parseSeekTime(input) {
                 return null;
             }
 
-            totalMs = (minutes * 60 + seconds) * 1000;
+            totalMs =
+                (minutes * 60 + seconds) * 1000;
         } else if (parts.length === 3) {
             const [hours, minutes, seconds] = parts;
 
@@ -112,118 +113,228 @@ function parseSeekTime(input) {
             }
 
             totalMs =
-                (hours * 60 * 60 +
+                (
+                    hours * 60 * 60 +
                     minutes * 60 +
-                    seconds) *
-                1000;
+                    seconds
+                ) * 1000;
         }
 
         matched = true;
     }
 
-    return matched && totalMs > 0 ? totalMs : null;
+    return matched && totalMs > 0
+        ? totalMs
+        : null;
 }
 
 function getCurrentPosition(player) {
-    const startTime = Number(player?._musicTrackStartTime);
-    const startPosition = Number(player?._musicTrackStartPosition);
-    const pausedAt = Number(player?._musicPausedAt);
+    const startTime =
+        Number(player?._musicTrackStartTime);
 
-    if (player?.paused && Number.isFinite(pausedAt)) {
+    const startPosition =
+        Number(player?._musicTrackStartPosition);
+
+    const pausedAt =
+        Number(player?._musicPausedAt);
+
+    if (
+        player?.paused &&
+        Number.isFinite(pausedAt)
+    ) {
         return Math.max(0, pausedAt);
     }
 
-    if (Number.isFinite(startTime) && Number.isFinite(startPosition)) {
+    if (
+        Number.isFinite(startTime) &&
+        Number.isFinite(startPosition)
+    ) {
         return Math.max(
             0,
-            startPosition + Math.max(0, Date.now() - startTime)
+            startPosition +
+                Math.max(
+                    0,
+                    Date.now() - startTime
+                )
         );
     }
 
-    const position = Number(player?.position);
+    const position =
+        Number(player?.position);
 
-    return Number.isFinite(position) && position >= 0
+    return Number.isFinite(position) &&
+        position >= 0
         ? position
         : 0;
 }
 
-function updateSeekTiming(player, newPosition) {
-    player._musicTrackStartPosition = newPosition;
-    player._musicTrackStartTime = Date.now();
+function updateSeekTiming(
+    player,
+    newPosition
+) {
+    player._musicTrackStartPosition =
+        newPosition;
+
+    player._musicTrackStartTime =
+        Date.now();
 
     if (player.paused) {
-        player._musicPausedAt = newPosition;
+        player._musicPausedAt =
+            newPosition;
     } else {
         player._musicPausedAt = null;
     }
 }
 
-async function handleMusicButton(interaction, client) {
-    const player = getPlayer(client, interaction.guild.id);
-    const guildData = getGuildMusicData(interaction.guild.id);
-    const customId = interaction.customId;
+function buildSeekModal() {
+    const modal =
+        new ModalBuilder()
+            .setCustomId(
+                MUSIC_MODAL_IDS.SEEK
+            )
+            .setTitle(
+                'Seek in Current Song'
+            );
 
-    if (customId === MUSIC_BUTTON_IDS.SEEK) {
-        if (!player?.current) {
-            return replyUserError(interaction, {
-                type: ErrorTypes.USER_INPUT,
-                message: 'Nothing is playing right now.',
-            });
-        }
-
-        if (!canControlMusic(interaction.member, player)) {
-            return replyUserError(interaction, {
-                type: ErrorTypes.PERMISSION,
-                message: VOICE_CHANNEL_DENIAL,
-            });
-        }
-
-        const modal = new ModalBuilder()
-            .setCustomId(MUSIC_MODAL_IDS.SEEK)
-            .setTitle('Seek in Current Song');
-
-        const input = new TextInputBuilder()
-            .setCustomId(MUSIC_INPUT_IDS.SEEK_AMOUNT)
-            .setLabel('How far forward should I skip?')
-            .setPlaceholder('Examples: 30, 90s, 1:30, 2m 15s')
-            .setStyle(TextInputStyle.Short)
+    const input =
+        new TextInputBuilder()
+            .setCustomId(
+                MUSIC_INPUT_IDS.SEEK_AMOUNT
+            )
+            .setLabel(
+                'How far forward should I skip?'
+            )
+            .setPlaceholder(
+                'Examples: 30, 90s, 1:30, 2m 15s'
+            )
+            .setStyle(
+                TextInputStyle.Short
+            )
             .setRequired(true)
             .setMaxLength(20);
 
-        modal.addComponents(
-            new ActionRowBuilder().addComponents(input)
-        );
+    modal.addComponents(
+        new ActionRowBuilder().addComponents(
+            input
+        )
+    );
 
-        return interaction.showModal(modal);
+    return modal;
+}
+
+async function handleMusicButton(
+    interaction,
+    client
+) {
+    const customId =
+        interaction.customId;
+
+    // ========================================================
+    // SEEK
+    //
+    // A Seek button must be acknowledged immediately.
+    // Do not perform music/player work before opening the modal.
+    // The actual validation and seek happen in the modal submit.
+    // ========================================================
+
+    if (
+        customId ===
+        MUSIC_BUTTON_IDS.SEEK
+    ) {
+        try {
+            await interaction.showModal(
+                buildSeekModal()
+            );
+        } catch (error) {
+            logger.error(
+                'Failed to open music seek modal:',
+                error
+            );
+
+            // Only attempt another response if Discord has not
+            // already accepted the modal interaction.
+            if (
+                !interaction.replied &&
+                !interaction.deferred
+            ) {
+                await replyUserError(
+                    interaction,
+                    {
+                        type:
+                            ErrorTypes.INTERNAL,
+                        message:
+                            'I could not open the seek menu.',
+                    }
+                ).catch(() => {});
+            }
+        }
+
+        return;
     }
 
-    if (customId === MUSIC_BUTTON_IDS.QUEUE) {
-        if (!player?.current) {
-            return replyUserError(interaction, {
-                type: ErrorTypes.USER_INPUT,
-                message: 'Nothing is playing right now.',
-            });
-        }
-
-        if (!canControlMusic(interaction.member, player)) {
-            return replyUserError(interaction, {
-                type: ErrorTypes.PERMISSION,
-                message: VOICE_CHANNEL_DENIAL,
-            });
-        }
-
-        guildData.queuePages.set(interaction.user.id, 0);
-
-        const payload = buildQueueReply(
+    const player =
+        getPlayer(
             client,
-            interaction.guild.id,
+            interaction.guild.id
+        );
+
+    const guildData =
+        getGuildMusicData(
+            interaction.guild.id
+        );
+
+    if (
+        customId ===
+        MUSIC_BUTTON_IDS.QUEUE
+    ) {
+        if (!player?.current) {
+            return replyUserError(
+                interaction,
+                {
+                    type:
+                        ErrorTypes.USER_INPUT,
+                    message:
+                        'Nothing is playing right now.',
+                }
+            );
+        }
+
+        if (
+            !canControlMusic(
+                interaction.member,
+                player
+            )
+        ) {
+            return replyUserError(
+                interaction,
+                {
+                    type:
+                        ErrorTypes.PERMISSION,
+                    message:
+                        VOICE_CHANNEL_DENIAL,
+                }
+            );
+        }
+
+        guildData.queuePages.set(
+            interaction.user.id,
             0
         );
 
+        const payload =
+            buildQueueReply(
+                client,
+                interaction.guild.id,
+                0
+            );
+
         return interaction.reply({
-            embeds: payload.embeds,
-            components: payload.components,
-            flags: MessageFlags.Ephemeral,
+            embeds:
+                payload.embeds,
+            components:
+                payload.components,
+            flags:
+                MessageFlags.Ephemeral,
         });
     }
 
@@ -234,31 +345,56 @@ async function handleMusicButton(interaction, client) {
         MUSIC_BUTTON_IDS.QUEUE_LAST,
     ];
 
-    if (queuePaginationIds.includes(customId)) {
+    if (
+        queuePaginationIds.includes(
+            customId
+        )
+    ) {
         if (!player?.current) {
-            return replyUserError(interaction, {
-                type: ErrorTypes.USER_INPUT,
-                message: 'Nothing is playing right now.',
-            });
+            return replyUserError(
+                interaction,
+                {
+                    type:
+                        ErrorTypes.USER_INPUT,
+                    message:
+                        'Nothing is playing right now.',
+                }
+            );
         }
 
-        if (!canControlMusic(interaction.member, player)) {
-            return replyUserError(interaction, {
-                type: ErrorTypes.PERMISSION,
-                message: VOICE_CHANNEL_DENIAL,
-            });
+        if (
+            !canControlMusic(
+                interaction.member,
+                player
+            )
+        ) {
+            return replyUserError(
+                interaction,
+                {
+                    type:
+                        ErrorTypes.PERMISSION,
+                    message:
+                        VOICE_CHANNEL_DENIAL,
+                }
+            );
         }
 
         await interaction.deferUpdate();
 
-        const payload = buildQueueReply(
-            client,
-            interaction.guild.id,
-            guildData.queuePages.get(interaction.user.id) || 0
-        );
+        const payload =
+            buildQueueReply(
+                client,
+                interaction.guild.id,
+                guildData.queuePages.get(
+                    interaction.user.id
+                ) || 0
+            );
 
-        const totalPages = payload.totalPages;
-        let page = payload.page;
+        const totalPages =
+            payload.totalPages;
+
+        let page =
+            payload.page;
 
         switch (customId) {
             case MUSIC_BUTTON_IDS.QUEUE_FIRST:
@@ -266,15 +402,22 @@ async function handleMusicButton(interaction, client) {
                 break;
 
             case MUSIC_BUTTON_IDS.QUEUE_PREV:
-                page = Math.max(0, page - 1);
+                page = Math.max(
+                    0,
+                    page - 1
+                );
                 break;
 
             case MUSIC_BUTTON_IDS.QUEUE_NEXT:
-                page = Math.min(totalPages - 1, page + 1);
+                page = Math.min(
+                    totalPages - 1,
+                    page + 1
+                );
                 break;
 
             case MUSIC_BUTTON_IDS.QUEUE_LAST:
-                page = totalPages - 1;
+                page =
+                    totalPages - 1;
                 break;
 
             default:
@@ -286,30 +429,48 @@ async function handleMusicButton(interaction, client) {
             page
         );
 
-        const updated = buildQueueReply(
-            client,
-            interaction.guild.id,
-            page
-        );
+        const updated =
+            buildQueueReply(
+                client,
+                interaction.guild.id,
+                page
+            );
 
         return interaction.editReply({
-            embeds: updated.embeds,
-            components: updated.components,
+            embeds:
+                updated.embeds,
+            components:
+                updated.components,
         });
     }
 
     if (!player) {
-        return replyUserError(interaction, {
-            type: ErrorTypes.USER_INPUT,
-            message: 'No music is playing. Use `/play` first.',
-        });
+        return replyUserError(
+            interaction,
+            {
+                type:
+                    ErrorTypes.USER_INPUT,
+                message:
+                    'No music is playing. Use `/play` first.',
+            }
+        );
     }
 
-    if (!canControlMusic(interaction.member, player)) {
-        return replyUserError(interaction, {
-            type: ErrorTypes.PERMISSION,
-            message: VOICE_CHANNEL_DENIAL,
-        });
+    if (
+        !canControlMusic(
+            interaction.member,
+            player
+        )
+    ) {
+        return replyUserError(
+            interaction,
+            {
+                type:
+                    ErrorTypes.PERMISSION,
+                message:
+                    VOICE_CHANNEL_DENIAL,
+            }
+        );
     }
 
     await interaction.deferUpdate();
@@ -331,10 +492,15 @@ async function handleMusicButton(interaction, client) {
                 break;
 
             case MUSIC_BUTTON_IDS.SKIP:
-                // Under track-loop, stop() would replay the same track.
-                // Clear it temporarily so skip advances to the next track.
-                if (player.loop === 'track') {
-                    player.setLoop('none');
+                // Under track-loop, stop() would replay the same
+                // track. Temporarily disable it so skip advances.
+                if (
+                    player.loop ===
+                    'track'
+                ) {
+                    player.setLoop(
+                        'none'
+                    );
                 }
 
                 player.stop();
@@ -350,9 +516,14 @@ async function handleMusicButton(interaction, client) {
                 break;
 
             case MUSIC_BUTTON_IDS.SHUFFLE:
-                if (player.queue.length > 0) {
+                if (
+                    player.queue.length >
+                    0
+                ) {
                     player.queue.shuffle();
-                    guildData.shuffle = true;
+
+                    guildData.shuffle =
+                        true;
 
                     await refreshPlayerMessage(
                         client,
@@ -368,9 +539,11 @@ async function handleMusicButton(interaction, client) {
                     );
 
                 const next =
-                    guildDataLoop.loop === 'none'
+                    guildDataLoop.loop ===
+                    'none'
                         ? 'track'
-                        : guildDataLoop.loop === 'track'
+                        : guildDataLoop.loop ===
+                          'track'
                             ? 'queue'
                             : 'none';
 
@@ -384,10 +557,11 @@ async function handleMusicButton(interaction, client) {
             }
 
             case MUSIC_BUTTON_IDS.VOL_DOWN:
-                guildData.volume = Math.max(
-                    0,
-                    guildData.volume - 10
-                );
+                guildData.volume =
+                    Math.max(
+                        0,
+                        guildData.volume - 10
+                    );
 
                 player.setVolume(
                     guildData.volume
@@ -397,14 +571,14 @@ async function handleMusicButton(interaction, client) {
                     client,
                     interaction.guild.id
                 );
-
                 break;
 
             case MUSIC_BUTTON_IDS.VOL_UP:
-                guildData.volume = Math.min(
-                    100,
-                    guildData.volume + 10
-                );
+                guildData.volume =
+                    Math.min(
+                        100,
+                        guildData.volume + 10
+                    );
 
                 player.setVolume(
                     guildData.volume
@@ -414,7 +588,6 @@ async function handleMusicButton(interaction, client) {
                     client,
                     interaction.guild.id
                 );
-
                 break;
 
             default:
@@ -426,7 +599,8 @@ async function handleMusicButton(interaction, client) {
             error,
             {
                 type: 'button',
-                customId: interaction.customId,
+                customId:
+                    interaction.customId,
                 handler: 'music',
             }
         );
@@ -434,14 +608,21 @@ async function handleMusicButton(interaction, client) {
 }
 
 export const musicButtonHandler = {
-    async execute(interaction, client) {
+    async execute(
+        interaction,
+        client
+    ) {
         try {
             if (!client.riffy) {
-                return replyUserError(interaction, {
-                    type: ErrorTypes.CONFIGURATION,
-                    message:
-                        'Music is unavailable — Lavalink is not configured.',
-                });
+                return replyUserError(
+                    interaction,
+                    {
+                        type:
+                            ErrorTypes.CONFIGURATION,
+                        message:
+                            'Music is unavailable — Lavalink is not configured.',
+                    }
+                );
             }
 
             await handleMusicButton(
@@ -453,7 +634,8 @@ export const musicButtonHandler = {
                 interaction,
                 error,
                 {
-                    handler: 'musicButton',
+                    handler:
+                        'musicButton',
                 }
             );
         }
@@ -471,87 +653,125 @@ export async function handleMusicSeekModal(
         return false;
     }
 
-    const player = getPlayer(
-        client,
-        interaction.guild.id
-    );
+    const player =
+        getPlayer(
+            client,
+            interaction.guild.id
+        );
 
     if (!player?.current) {
-        await replyUserError(interaction, {
-            type: ErrorTypes.USER_INPUT,
-            message: 'Nothing is playing right now.',
-        });
+        await replyUserError(
+            interaction,
+            {
+                type:
+                    ErrorTypes.USER_INPUT,
+                message:
+                    'Nothing is playing right now.',
+            }
+        );
 
         return true;
     }
 
-    if (!canControlMusic(
-        interaction.member,
-        player
-    )) {
-        await replyUserError(interaction, {
-            type: ErrorTypes.PERMISSION,
-            message: VOICE_CHANNEL_DENIAL,
-        });
+    if (
+        !canControlMusic(
+            interaction.member,
+            player
+        )
+    ) {
+        await replyUserError(
+            interaction,
+            {
+                type:
+                    ErrorTypes.PERMISSION,
+                message:
+                    VOICE_CHANNEL_DENIAL,
+            }
+        );
 
         return true;
     }
 
-    const input = interaction.fields.getTextInputValue(
-        MUSIC_INPUT_IDS.SEEK_AMOUNT
-    );
+    const input =
+        interaction.fields.getTextInputValue(
+            MUSIC_INPUT_IDS.SEEK_AMOUNT
+        );
 
-    const skipMs = parseSeekTime(input);
+    const skipMs =
+        parseSeekTime(input);
 
     if (!skipMs) {
-        await replyUserError(interaction, {
-            type: ErrorTypes.USER_INPUT,
-            message:
-                'Invalid time. Use something like `30`, `90s`, `1:30`, or `2m 15s`.',
-        });
+        await replyUserError(
+            interaction,
+            {
+                type:
+                    ErrorTypes.USER_INPUT,
+                message:
+                    'Invalid time. Use something like `30`, `90s`, `1:30`, or `2m 15s`.',
+            }
+        );
 
         return true;
     }
 
-    const duration = Number(
-        player.current?.info?.length
-    );
+    const duration =
+        Number(
+            player.current?.info?.length
+        );
 
     const currentPosition =
-        getCurrentPosition(player);
+        getCurrentPosition(
+            player
+        );
 
     if (
         !Number.isFinite(duration) ||
         duration <= 0
     ) {
-        await replyUserError(interaction, {
-            type: ErrorTypes.USER_INPUT,
-            message:
-                'I cannot seek in this track because its duration is unavailable.',
-        });
+        await replyUserError(
+            interaction,
+            {
+                type:
+                    ErrorTypes.USER_INPUT,
+                message:
+                    'I cannot seek in this track because its duration is unavailable.',
+            }
+        );
 
         return true;
     }
 
-    const newPosition = Math.min(
-        currentPosition + skipMs,
-        Math.max(0, duration - 500)
-    );
+    const newPosition =
+        Math.min(
+            currentPosition +
+                skipMs,
+            Math.max(
+                0,
+                duration - 500
+            )
+        );
 
     if (
-        newPosition <= currentPosition
+        newPosition <=
+        currentPosition
     ) {
-        await replyUserError(interaction, {
-            type: ErrorTypes.USER_INPUT,
-            message:
-                'That would put the song at the end. Try a smaller amount.',
-        });
+        await replyUserError(
+            interaction,
+            {
+                type:
+                    ErrorTypes.USER_INPUT,
+                message:
+                    'That would put the song at the end. Try a smaller amount.',
+            }
+        );
 
         return true;
     }
 
     try {
-        await player.seek(newPosition);
+        await player.seek(
+            newPosition
+        );
 
         updateSeekTiming(
             player,
@@ -560,8 +780,11 @@ export async function handleMusicSeekModal(
 
         await interaction.reply({
             content:
-                `⏩ Skipped forward **${Math.round(skipMs / 1000)} seconds**.`,
-            flags: MessageFlags.Ephemeral,
+                `⏩ Skipped forward **${Math.round(
+                    skipMs / 1000
+                )} seconds**.`,
+            flags:
+                MessageFlags.Ephemeral,
         });
 
         await refreshPlayerMessage(
@@ -576,11 +799,15 @@ export async function handleMusicSeekModal(
             error
         );
 
-        await replyUserError(interaction, {
-            type: ErrorTypes.INTERNAL,
-            message:
-                'I could not seek in the current song.',
-        });
+        await replyUserError(
+            interaction,
+            {
+                type:
+                    ErrorTypes.INTERNAL,
+                message:
+                    'I could not seek in the current song.',
+            }
+        );
 
         return true;
     }
