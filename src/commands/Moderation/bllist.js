@@ -1,5 +1,5 @@
 import { createEmbed } from '../../utils/embeds.js';
-import { isBlacklisted, getBlacklistedUsers } from '../../utils/blacklist.js';
+import { getBlacklistedUsers } from '../../utils/blacklist.js';
 
 const BLACKLIST_OWNER_ID = '1171948174190067737';
 
@@ -51,16 +51,21 @@ export default {
             const userLines = [];
 
             for (const userId of blacklistedUsers) {
-                let displayName = `Unknown User`;
+                let displayName =
+                    'Unknown User';
 
                 try {
                     const user =
-                        await client.users.fetch(userId);
+                        await client.users.fetch(
+                            userId
+                        );
 
                     displayName =
-                        user.tag || user.username;
+                        user.tag ||
+                        user.username ||
+                        'Unknown User';
                 } catch {
-                    // User may no longer be fetchable.
+                    // The user may no longer be fetchable.
                 }
 
                 userLines.push(
@@ -68,8 +73,21 @@ export default {
                 );
             }
 
-            const description =
+            /*
+             * Discord embed descriptions have a 4096-character limit.
+             * Keep the list within that limit.
+             */
+            let description =
                 userLines.join('\n');
+
+            if (description.length > 4000) {
+                description =
+                    description.substring(
+                        0,
+                        3990
+                    ) +
+                    '\n\n…and more.';
+            }
 
             await message.channel.send({
                 embeds: [
