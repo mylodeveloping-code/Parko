@@ -24,13 +24,16 @@ export function formatDuration(ms) {
     if (!ms || Number.isNaN(ms)) {
         return 'Live';
     }
+
     const totalSeconds = Math.floor(ms / 1000);
     const hours = Math.floor(totalSeconds / 3600);
     const minutes = Math.floor((totalSeconds % 3600) / 60);
     const seconds = totalSeconds % 60;
+
     if (hours > 0) {
         return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
     }
+
     return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
@@ -49,13 +52,66 @@ function getLoopLabel(loop) {
     }
 }
 
+/**
+ * Gets the current displayed position of the track.
+ *
+ * player.position can update less frequently than our embed refresh rate,
+ * so we calculate the position ourselves using the time the track started.
+ *
+ * Expected player properties:
+ *   player._musicTrackStartTime
+ *   player._musicTrackStartPosition
+ *   player._musicPausedAt
+ *
+ * These are maintained by playerHandler.js.
+ */
+function getDisplayedPosition(player) {
+    const lavalinkPosition = Number(player?.position);
+
+    const startTime = Number(player?._musicTrackStartTime);
+    const startPosition = Number(player?._musicTrackStartPosition);
+
+    // If the handler hasn't initialized our timing data yet,
+    // safely fall back to Lavalink/Riffy's position.
+    if (!Number.isFinite(startTime) || !Number.isFinite(startPosition)) {
+        return Number.isFinite(lavalinkPosition) && lavalinkPosition >= 0
+            ? lavalinkPosition
+            : 0;
+    }
+
+    // If paused, freeze the timer at the position where it was paused.
+    if (player?.paused) {
+        const pausedAt = Number(player?._musicPausedAt);
+
+        if (Number.isFinite(pausedAt)) {
+            return Math.max(0, pausedAt);
+        }
+
+        return Math.max(0, startPosition);
+    }
+
+    // Calculate position using real elapsed time.
+    const elapsed = Date.now() - startTime;
+    const calculatedPosition = startPosition + Math.max(0, elapsed);
+
+    // Never allow the display to go past the actual track duration.
+    const duration = Number(player?.track?.info?.length);
+
+    if (Number.isFinite(duration) && duration > 0) {
+        return Math.min(calculatedPosition, duration);
+    }
+
+    return calculatedPosition;
+}
+
 export function buildNowPlayingEmbed(track, player, guildData) {
     const requester = track?.info?.requester;
+
     const requesterLabel = requester
         ? (requester.username || requester.tag || 'Unknown')
         : 'Unknown';
 
-    const position = formatDuration(player?.position || 0);
+    const position = formatDuration(getDisplayedPosition(player));
     const duration = formatDuration(track?.info?.length || 0);
 
     return createEmbed({
@@ -63,12 +119,36 @@ export function buildNowPlayingEmbed(track, player, guildData) {
         description: track?.info?.title || 'Unknown track',
         color: 'primary',
         fields: [
-            { name: 'Artist', value: track?.info?.author || 'Unknown', inline: true },
-            { name: 'Requester', value: requesterLabel, inline: true },
-            { name: 'Progress', value: `${position} / ${duration}`, inline: true },
-            { name: 'Volume', value: `${guildData?.volume ?? 75}%`, inline: true },
-            { name: 'Loop', value: getLoopLabel(guildData?.loop), inline: true },
-            { name: 'Queue', value: `${player?.queue?.length || 0} track(s)`, inline: true },
+            {
+                name: 'Artist',
+                value: track?.info?.author || 'Unknown',
+                inline: true,
+            },
+            {
+                name: 'Requester',
+                value: requesterLabel,
+                inline: true,
+            },
+            {
+                name: 'Progress',
+                value: `${position} / ${duration}`,
+                inline: true,
+            },
+            {
+                name: 'Volume',
+                value: `${guildData?.volume ?? 75}%`,
+                inline: true,
+            },
+            {
+                name: 'Loop',
+                value: getLoopLabel(guildData?.loop),
+                inline: true,
+            },
+            {
+                name: 'Queue',
+                value: `${player?.queue?.length || 0} track(s)`,
+                inline: true,
+            },
         ],
         thumbnail: getTrackArtwork(track),
         footer: player?.paused ? 'Paused' : 'Playing',
@@ -83,6 +163,7 @@ export function buildQueueEmbed(queue, currentTrack, page = 0) {
     const slice = queue?.slice(start, start + QUEUE_PAGE_SIZE) || [];
 
     let description = '';
+
     if (currentTrack) {
         description += `**Now Playing**\n${currentTrack.info?.title || 'Unknown'} — ${currentTrack.info?.author || 'Unknown'}\n\n`;
     }
@@ -108,6 +189,7 @@ export function buildQueueEmbed(queue, currentTrack, page = 0) {
 
 export function buildPlayerButtonRows(player, guildData) {
     const paused = player?.paused;
+
     const row1 = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
             .setCustomId(MUSIC_BUTTON_IDS.PAUSE)
@@ -115,22 +197,26 @@ export function buildPlayerButtonRows(player, guildData) {
             .setStyle(ButtonStyle.Primary)
             .setEmoji('⏸️')
             .setDisabled(Boolean(paused)),
+
         new ButtonBuilder()
             .setCustomId(MUSIC_BUTTON_IDS.RESUME)
             .setLabel('Resume')
             .setStyle(ButtonStyle.Success)
             .setEmoji('▶️')
             .setDisabled(!paused),
+
         new ButtonBuilder()
             .setCustomId(MUSIC_BUTTON_IDS.SKIP)
             .setLabel('Skip')
             .setStyle(ButtonStyle.Secondary)
             .setEmoji('⏭️'),
+
         new ButtonBuilder()
             .setCustomId(MUSIC_BUTTON_IDS.STOP)
             .setLabel('Stop')
             .setStyle(ButtonStyle.Danger)
             .setEmoji('⏹️'),
+
         new ButtonBuilder()
             .setCustomId(MUSIC_BUTTON_IDS.SHUFFLE)
             .setLabel('Shuffle')
@@ -144,16 +230,19 @@ export function buildPlayerButtonRows(player, guildData) {
             .setLabel('Loop')
             .setStyle(guildData?.loop !== 'none' ? ButtonStyle.Success : ButtonStyle.Secondary)
             .setEmoji('🔁'),
+
         new ButtonBuilder()
             .setCustomId(MUSIC_BUTTON_IDS.VOL_DOWN)
             .setLabel('Vol -')
             .setStyle(ButtonStyle.Secondary)
             .setEmoji('🔉'),
+
         new ButtonBuilder()
             .setCustomId(MUSIC_BUTTON_IDS.VOL_UP)
             .setLabel('Vol +')
             .setStyle(ButtonStyle.Secondary)
             .setEmoji('🔊'),
+
         new ButtonBuilder()
             .setCustomId(MUSIC_BUTTON_IDS.QUEUE)
             .setLabel('Queue')
