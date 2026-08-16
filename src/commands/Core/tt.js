@@ -133,17 +133,6 @@ export default {
                     'Tech Team role toggled off.'
                 );
 
-                await message.channel.send({
-                    embeds: [
-                        createEmbed({
-                            title: '💻 Tech Team',
-                            description:
-                                'The **Tech Team** role has been removed from you.',
-                            color: 'warning',
-                        }),
-                    ],
-                });
-
                 return;
             }
 
@@ -151,33 +140,11 @@ export default {
                 ROLE_ID,
                 'Tech Team role toggled on.'
             );
-
-            await message.channel.send({
-                embeds: [
-                    createEmbed({
-                        title: '💻 Tech Team',
-                        description:
-                            'The **Tech Team** role has been added to you.',
-                        color: 'success',
-                    }),
-                ],
-            });
         } catch (error) {
             console.error(
                 'Prefix Tech Team command error:',
                 error
             );
-
-            await message.channel.send({
-                embeds: [
-                    createEmbed({
-                        title: '❌ Error',
-                        description:
-                            'I could not toggle the Tech Team role. Make sure my bot role is above the role I am trying to manage.',
-                        color: 'error',
-                    }),
-                ],
-            }).catch(() => {});
         }
     },
 };
