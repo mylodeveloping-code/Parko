@@ -113,12 +113,12 @@ function resolveUserId(value) {
 export function createMockInteraction(
     message,
     commandData,
-    args
+    args,
 ) {
     const options =
         mapArgumentsToOptions(
             args,
-            commandData
+            commandData,
         );
 
     const commandStartTime =
@@ -180,7 +180,7 @@ export function createMockInteraction(
 
                 const cachedMember =
                     message.guild?.members?.cache?.get(
-                        userId
+                        userId,
                     );
 
                 if (cachedMember?.user) {
@@ -189,7 +189,7 @@ export function createMockInteraction(
 
                 const cachedUser =
                     message.client?.users?.cache?.get(
-                        userId
+                        userId,
                     );
 
                 if (cachedUser) {
@@ -230,7 +230,7 @@ export function createMockInteraction(
 
                 const cachedMember =
                     message.guild?.members?.cache?.get(
-                        userId
+                        userId,
                     );
 
                 if (cachedMember) {
@@ -250,7 +250,7 @@ export function createMockInteraction(
 
                 const match =
                     String(rawValue).match(
-                        /^<#(\d+)>$/
+                        /^<#(\d+)>$/,
                     );
 
                 const channelId =
@@ -273,7 +273,7 @@ export function createMockInteraction(
 
                 const match =
                     String(rawValue).match(
-                        /^<@&(\d+)>$/
+                        /^<@&(\d+)>$/,
                     );
 
                 const roleId =
@@ -320,7 +320,7 @@ export function createMockInteraction(
 
                         type:
                             3,
-                    })
+                    }),
                 ),
         },
 
@@ -388,7 +388,7 @@ export function createMockInteraction(
             mockInteraction,
             {
                 message,
-            }
+            },
         );
 
     mockInteraction._responseCoordinator =
@@ -411,7 +411,7 @@ export function createMockInteraction(
             coordinator.deferLocal();
 
     InteractionHelper.patchInteractionResponses(
-        mockInteraction
+        mockInteraction,
     );
 
     return mockInteraction;
@@ -422,7 +422,7 @@ export function createMockInteraction(
 // ============================================================
 
 export function supportsPrefixExecution(
-    command
+    command,
 ) {
     if (
         command.prefixOnly === false ||
@@ -462,7 +462,7 @@ export async function executePrefixCommand(
     args,
     client,
     prefixOverride = null,
-    guildConfig = null
+    guildConfig = null,
 ) {
     // ========================================================
     // BLACKLIST CHECK
@@ -470,11 +470,11 @@ export async function executePrefixCommand(
 
     if (
         isBlacklisted(
-            message.author.id
+            message.author.id,
         )
     ) {
         logger.info(
-            `Blocked blacklisted user ${message.author.tag} (${message.author.id}) from using prefix command.`
+            `Blocked blacklisted user ${message.author.tag} (${message.author.id}) from using prefix command.`,
         );
 
         return;
@@ -502,12 +502,12 @@ export async function executePrefixCommand(
             await command.messageExecute(
                 message,
                 args,
-                client
+                client,
             );
         } catch (error) {
             logger.error(
                 `Error executing message-based prefix command ${command.data?.name}:`,
-                error
+                error,
             );
         }
 
@@ -522,7 +522,7 @@ export async function executePrefixCommand(
         createMockInteraction(
             message,
             command.data,
-            args
+            args,
         );
 
     const coordinator =
@@ -546,7 +546,7 @@ export async function executePrefixCommand(
                         'messageAdapter.executePrefixCommand',
 
                     guildConfig,
-                }
+                },
             );
 
         if (!permissionAllowed) {
@@ -564,8 +564,8 @@ export async function executePrefixCommand(
         if (!validation.valid) {
             await coordinator.respondUsageFromCommand(
                 prefix,
-                command.data,
-                validation
+                command,
+                validation,
             );
 
             return;
@@ -579,13 +579,13 @@ export async function executePrefixCommand(
             await command.prefixExecute(
                 mockInteraction,
                 guildConfig,
-                client
+                client,
             );
         } else {
             await command.execute(
                 mockInteraction,
                 guildConfig,
-                client
+                client,
             );
         }
 
@@ -602,7 +602,7 @@ export async function executePrefixCommand(
 
                 source:
                     'messageAdapter.executePrefixCommand',
-            }
+            },
         );
     }
 }
