@@ -1,3 +1,8 @@
+import {
+    SlashCommandBuilder,
+    PermissionFlagsBits,
+} from 'discord.js';
+
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -12,12 +17,12 @@ const blacklistFile = path.join(
 
 const dataDir = path.dirname(blacklistFile);
 
-// Make sure the data directory exists.
 if (!fs.existsSync(dataDir)) {
-    fs.mkdirSync(dataDir, { recursive: true });
+    fs.mkdirSync(dataDir, {
+        recursive: true,
+    });
 }
 
-// Make sure the blacklist file exists.
 if (!fs.existsSync(blacklistFile)) {
     fs.writeFileSync(
         blacklistFile,
@@ -27,12 +32,14 @@ if (!fs.existsSync(blacklistFile)) {
 
 function loadBlacklist() {
     try {
-        const data = fs.readFileSync(
-            blacklistFile,
-            'utf8'
-        );
+        const data =
+            fs.readFileSync(
+                blacklistFile,
+                'utf8'
+            );
 
-        const parsed = JSON.parse(data);
+        const parsed =
+            JSON.parse(data);
 
         if (!Array.isArray(parsed)) {
             return [];
@@ -47,8 +54,36 @@ function loadBlacklist() {
 function saveBlacklist(blacklist) {
     fs.writeFileSync(
         blacklistFile,
-        JSON.stringify(blacklist, null, 2)
+        JSON.stringify(
+            blacklist,
+            null,
+            2
+        )
     );
+}
+
+function resolveUserId(value) {
+    if (!value) {
+        return null;
+    }
+
+    const stringValue =
+        String(value).trim();
+
+    const mentionMatch =
+        stringValue.match(
+            /^<@!?(\d+)>$/
+        );
+
+    if (mentionMatch) {
+        return mentionMatch[1];
+    }
+
+    if (/^\d{17,20}$/.test(stringValue)) {
+        return stringValue;
+    }
+
+    return null;
 }
 
 export function isBlacklisted(userId) {
@@ -56,52 +91,69 @@ export function isBlacklisted(userId) {
         return false;
     }
 
-    const blacklist = loadBlacklist();
-
-    return blacklist.includes(
+    return loadBlacklist().includes(
         String(userId)
     );
 }
 
 export function addToBlacklist(userId) {
-    if (!userId) {
+    const resolvedId =
+        resolveUserId(userId);
+
+    if (!resolvedId) {
         return false;
     }
 
-    userId = String(userId);
+    const blacklist =
+        loadBlacklist();
 
-    const blacklist = loadBlacklist();
-
-    if (blacklist.includes(userId)) {
+    if (
+        blacklist.includes(
+            resolvedId
+        )
+    ) {
         return false;
     }
 
-    blacklist.push(userId);
+    blacklist.push(
+        resolvedId
+    );
 
-    saveBlacklist(blacklist);
+    saveBlacklist(
+        blacklist
+    );
 
     return true;
 }
 
 export function removeFromBlacklist(userId) {
-    if (!userId) {
+    const resolvedId =
+        resolveUserId(userId);
+
+    if (!resolvedId) {
         return false;
     }
 
-    userId = String(userId);
-
-    const blacklist = loadBlacklist();
+    const blacklist =
+        loadBlacklist();
 
     const index =
-        blacklist.indexOf(userId);
+        blacklist.indexOf(
+            resolvedId
+        );
 
     if (index === -1) {
         return false;
     }
 
-    blacklist.splice(index, 1);
+    blacklist.splice(
+        index,
+        1
+    );
 
-    saveBlacklist(blacklist);
+    saveBlacklist(
+        blacklist
+    );
 
     return true;
 }
@@ -109,3 +161,75 @@ export function removeFromBlacklist(userId) {
 export function getBlacklist() {
     return loadBlacklist();
 }
+
+export default {
+    data: new SlashCommandBuilder()
+        .setName('bl')
+        .setDescription(
+            'Blacklist a user from using the bot'
+        )
+        .addStringOption((option) =>
+            option
+                .setName('user_id')
+                .setDescription(
+                    'The Discord user ID to blacklist'
+                )
+                .setRequired(true)
+        )
+        .setDefaultMemberPermissions(
+            PermissionFlagsBits.Administrator
+        ),
+
+    category: 'moderation',
+
+    async execute(
+        interaction,
+        config,
+        client
+    ) {
+        const rawUserId =
+            interaction.options.getString(
+                'user_id'
+            );
+
+        const userId =
+            resolveUserId(
+                rawUserId
+            );
+
+        if (!userId) {
+            await interaction.reply(
+                'Please provide a valid Discord user ID.'
+            );
+
+            return;
+        }
+
+        if (
+            isBlacklisted(userId)
+        ) {
+            await interaction.reply(
+                `<@${userId}> is already blacklisted.`
+            );
+
+            return;
+        }
+
+        const added =
+            addToBlacklist(
+                userId
+            );
+
+        if (!added) {
+            await interaction.reply(
+                'I could not add that user to the blacklist.'
+            );
+
+            return;
+        }
+
+        await interaction.reply(
+            `<@${userId}> has been blacklisted and can no longer use this bot.`
+        );
+    },
+};
