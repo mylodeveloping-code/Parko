@@ -8,6 +8,7 @@ export const MUSIC_BUTTON_IDS = {
     PAUSE: 'music_pause',
     RESUME: 'music_resume',
     SKIP: 'music_skip',
+    SEEK: 'music_seek',
     STOP: 'music_stop',
     SHUFFLE: 'music_shuffle',
     LOOP: 'music_loop',
@@ -18,6 +19,14 @@ export const MUSIC_BUTTON_IDS = {
     QUEUE_PREV: 'music_queue_prev',
     QUEUE_NEXT: 'music_queue_next',
     QUEUE_LAST: 'music_queue_last',
+};
+
+export const MUSIC_MODAL_IDS = {
+    SEEK: 'music_seek_modal',
+};
+
+export const MUSIC_INPUT_IDS = {
+    SEEK_AMOUNT: 'music_seek_amount',
 };
 
 export function formatDuration(ms) {
@@ -52,34 +61,18 @@ function getLoopLabel(loop) {
     }
 }
 
-/**
- * Gets the current displayed position of the track.
- *
- * player.position can update less frequently than our embed refresh rate,
- * so we calculate the position ourselves using the time the track started.
- *
- * Expected player properties:
- *   player._musicTrackStartTime
- *   player._musicTrackStartPosition
- *   player._musicPausedAt
- *
- * These are maintained by playerHandler.js.
- */
 function getDisplayedPosition(player) {
     const lavalinkPosition = Number(player?.position);
 
     const startTime = Number(player?._musicTrackStartTime);
     const startPosition = Number(player?._musicTrackStartPosition);
 
-    // If the handler hasn't initialized our timing data yet,
-    // safely fall back to Lavalink/Riffy's position.
     if (!Number.isFinite(startTime) || !Number.isFinite(startPosition)) {
         return Number.isFinite(lavalinkPosition) && lavalinkPosition >= 0
             ? lavalinkPosition
             : 0;
     }
 
-    // If paused, freeze the timer at the position where it was paused.
     if (player?.paused) {
         const pausedAt = Number(player?._musicPausedAt);
 
@@ -90,12 +83,10 @@ function getDisplayedPosition(player) {
         return Math.max(0, startPosition);
     }
 
-    // Calculate position using real elapsed time.
     const elapsed = Date.now() - startTime;
     const calculatedPosition = startPosition + Math.max(0, elapsed);
 
-    // Never allow the display to go past the actual track duration.
-    const duration = Number(player?.track?.info?.length);
+    const duration = Number(player?.current?.info?.length);
 
     if (Number.isFinite(duration) && duration > 0) {
         return Math.min(calculatedPosition, duration);
@@ -212,19 +203,25 @@ export function buildPlayerButtonRows(player, guildData) {
             .setEmoji('⏭️'),
 
         new ButtonBuilder()
+            .setCustomId(MUSIC_BUTTON_IDS.SEEK)
+            .setLabel('Seek')
+            .setStyle(ButtonStyle.Secondary)
+            .setEmoji('⏩'),
+
+        new ButtonBuilder()
             .setCustomId(MUSIC_BUTTON_IDS.STOP)
             .setLabel('Stop')
             .setStyle(ButtonStyle.Danger)
             .setEmoji('⏹️'),
+    );
 
+    const row2 = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
             .setCustomId(MUSIC_BUTTON_IDS.SHUFFLE)
             .setLabel('Shuffle')
             .setStyle(guildData?.shuffle ? ButtonStyle.Success : ButtonStyle.Secondary)
             .setEmoji('🔀'),
-    );
 
-    const row2 = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
             .setCustomId(MUSIC_BUTTON_IDS.LOOP)
             .setLabel('Loop')
