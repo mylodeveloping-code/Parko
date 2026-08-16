@@ -5,7 +5,7 @@ export const botConfig = {
     status: "online", 
     activities: [ 
       { 
-        name: "Custom Status", 
+        name: "", 
         state: "", 
         type: 4, 
       }, 
