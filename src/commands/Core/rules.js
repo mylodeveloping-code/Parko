@@ -20,7 +20,7 @@ export default {
             )
             .addFields(
                 {
-                    name: '🛡️ General Rules',
+                    name: '🛡️ General Rules — 1–5',
                     value:
                         '⚔️ **1. No Hacking or Cheating**\n' +
                         'Do not use hacks, cheats, or unfair modifications, including **X-Ray, Kill Aura, Reach,** or similar advantages.\n\n' +
@@ -35,8 +35,11 @@ export default {
                         'Harassment, bullying, targeted toxicity, or intentionally making other players uncomfortable is prohibited.\n\n' +
 
                         '🔞 **5. Keep Chat Appropriate**\n' +
-                        'No sexual, inappropriate, excessively offensive, or otherwise unsuitable content.\n\n' +
-
+                        'No sexual, inappropriate, excessively offensive, or otherwise unsuitable content.',
+                },
+                {
+                    name: '🛡️ General Rules — 6–10',
+                    value:
                         '📛 **6. Keep Names, Skins & Builds Appropriate**\n' +
                         'Inappropriate usernames, skins, builds, or other visual content are not allowed.\n\n' +
 
@@ -53,7 +56,7 @@ export default {
                         'Do not disconnect from the server during combat to avoid PvP consequences.',
                 },
                 {
-                    name: '🏠 Gameplay & Community',
+                    name: '🏠 Gameplay & Community — 11–16',
                     value:
                         '🤝 **11. No Begging**\n' +
                         'Do not repeatedly beg players or staff for items, ranks, perks, or special treatment.\n\n' +
