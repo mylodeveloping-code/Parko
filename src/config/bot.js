@@ -1,17 +1,6 @@
 import { logger } from "../utils/logger.js";
 
 export const botConfig = {
-  presence: {
-    status: "online",
-    activities: [
-      {
-        name: "Custom Status",
-        state: "Uhhhh...",
-        type: 4,
-      },
-    ],
-  },
-
   commands: {
     owners:
       process.env.OWNER_IDS?.split(",")
