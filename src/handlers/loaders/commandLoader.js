@@ -105,13 +105,14 @@ export async function loadCommands(client) {
             const normalizedPath =
                 filePath.replace(/\\/g, '/');
 
+            const moduleUrl =
+                pathToFileURL(filePath).href;
+
             const commandModule =
-                await import(
-                    pathToFileURL(filePath).href
-                );
+                await import(moduleUrl);
 
             const command =
-                commandModule.default ||
+                commandModule.default ??
                 commandModule;
 
             if (
@@ -120,7 +121,7 @@ export async function loadCommands(client) {
                 typeof command.execute !== 'function'
             ) {
                 logger.warn(
-                    `Command at ${filePath} is missing required "data" or "execute" property.`,
+                    `⚠️ Command at ${normalizedPath} is missing required "data" or "execute" properties.`,
                 );
 
                 continue;
@@ -130,11 +131,25 @@ export async function loadCommands(client) {
                 getCommandJson(command.data);
 
             const primaryCommandName =
-                commandData.name?.toLowerCase();
+                String(
+                    commandData.name ?? '',
+                ).trim().toLowerCase();
 
             if (!primaryCommandName) {
                 logger.warn(
-                    `Command at ${filePath} does not have a valid command name.`,
+                    `⚠️ Command at ${normalizedPath} does not have a valid command name.`,
+                );
+
+                continue;
+            }
+
+            if (
+                uniqueCommandNames.has(
+                    primaryCommandName,
+                )
+            ) {
+                logger.warn(
+                    `⚠️ Duplicate command detected: ${primaryCommandName} at ${normalizedPath}. Skipping duplicate.`,
                 );
 
                 continue;
@@ -146,26 +161,11 @@ export async function loadCommands(client) {
             const category =
                 path.basename(commandDir);
 
-            command.category = category;
-            command.filePath = normalizedPath;
+            command.category =
+                category;
 
-            /*
-             * Store the normalized command name.
-             *
-             * Prefix commands use this collection to find
-             * commands such as .ping, .help, .role, etc.
-             */
-            if (
-                uniqueCommandNames.has(
-                    primaryCommandName,
-                )
-            ) {
-                logger.warn(
-                    `Duplicate command detected: ${primaryCommandName} at ${filePath}`,
-                );
-
-                continue;
-            }
+            command.filePath =
+                normalizedPath;
 
             uniqueCommandNames.add(
                 primaryCommandName,
@@ -181,7 +181,9 @@ export async function loadCommands(client) {
             );
 
             const subcommands =
-                getSubcommandInfo(commandData);
+                getSubcommandInfo(
+                    commandData,
+                );
 
             if (subcommands.length > 0) {
                 logger.info(
@@ -191,7 +193,9 @@ export async function loadCommands(client) {
         } catch (error) {
             logger.error(
                 `❌ Error loading command from ${filePath}:`,
-                error,
+                error?.stack ||
+                    error?.message ||
+                    error,
             );
         }
     }
@@ -200,13 +204,39 @@ export async function loadCommands(client) {
         `Loaded ${client.commands.size} commands`,
     );
 
+    /*
+     * Explicit diagnostics for important commands.
+     */
+
+    if (client.commands.has('youtube')) {
+        const youtubeCommand =
+            client.commands.get('youtube');
+
+        logger.info(
+            '✅ YouTube command successfully loaded.',
+        );
+
+        logger.info(
+            `   └─ YouTube command executable: ${
+                typeof youtubeCommand?.execute ===
+                'function'
+                    ? 'YES'
+                    : 'NO'
+            }`,
+        );
+    } else {
+        logger.error(
+            '❌ YouTube command was NOT found after loading commands.',
+        );
+    }
+
     if (client.commands.has('role')) {
         logger.info(
             '✅ /role command was successfully loaded.',
         );
     } else {
-        logger.error(
-            '❌ /role command was NOT found after loading commands.',
+        logger.warn(
+            '⚠️ /role command was NOT found after loading commands.',
         );
     }
 
@@ -221,7 +251,7 @@ function collectCommandPayloads(client) {
     for (const command of client.commands.values()) {
         if (!command?.data) {
             logger.warn(
-                'Command is missing data.',
+                '⚠️ Command is missing data. Skipping.',
             );
 
             continue;
@@ -232,28 +262,36 @@ function collectCommandPayloads(client) {
 
         if (!commandJson?.name) {
             logger.warn(
-                'Skipping command without a name.',
+                '⚠️ Skipping command without a name.',
             );
 
             continue;
         }
 
         const commandName =
-            commandJson.name.toLowerCase();
+            String(
+                commandJson.name,
+            ).toLowerCase();
 
         if (
-            registeredNames.has(commandName)
+            registeredNames.has(
+                commandName,
+            )
         ) {
             logger.warn(
-                `Skipping duplicate command: ${commandName}`,
+                `⚠️ Skipping duplicate command: ${commandName}`,
             );
 
             continue;
         }
 
-        registeredNames.add(commandName);
+        registeredNames.add(
+            commandName,
+        );
 
-        commands.push(commandJson);
+        commands.push(
+            commandJson,
+        );
 
         totalSubcommands +=
             getSubcommandInfo(
@@ -286,10 +324,10 @@ function validateCommands(commands) {
 
         if (
             cmd.description &&
-            cmd.description.length > 110
+            cmd.description.length > 100
         ) {
             validationErrors.push(
-                `Command ${cmd.name} has a description longer than 110 characters.`,
+                `Command ${cmd.name} has a description longer than Discord's 100-character limit.`,
             );
         }
 
@@ -309,10 +347,10 @@ function validateCommands(commands) {
 
             if (
                 option.description &&
-                option.description.length > 110
+                option.description.length > 100
             ) {
                 validationErrors.push(
-                    `Command ${cmd.name} option ${option.name} has a description longer than 110 characters.`,
+                    `Command ${cmd.name} option ${option.name} has a description longer than Discord's 100-character limit.`,
                 );
             }
         }
@@ -320,7 +358,7 @@ function validateCommands(commands) {
 
     if (validationErrors.length > 0) {
         logger.error(
-            'Command validation failed:',
+            '❌ Command validation failed:',
         );
 
         for (const error of validationErrors) {
@@ -402,19 +440,20 @@ async function registerGuildCommands(
         `✅ Successfully registered ${commands.length} commands to guild ${guildId}.`,
     );
 
-    const roleCommand =
+    const youtubeCommand =
         commands.find(
-            (command) =>
-                command.name === 'role',
+            command =>
+                command.name ===
+                'youtube',
         );
 
-    if (roleCommand) {
+    if (youtubeCommand) {
         logger.info(
-            '✅ /role is included in the registered guild commands.',
+            '✅ /youtube is included in the registered guild commands.',
         );
     } else {
         logger.error(
-            '❌ /role is NOT included in the registered guild commands.',
+            '❌ /youtube is NOT included in the registered guild commands.',
         );
     }
 }
@@ -451,19 +490,20 @@ async function registerGlobalCommands(
         `✅ Successfully registered ${commands.length} global commands.`,
     );
 
-    const roleCommand =
+    const youtubeCommand =
         commands.find(
-            (command) =>
-                command.name === 'role',
+            command =>
+                command.name ===
+                'youtube',
         );
 
-    if (roleCommand) {
+    if (youtubeCommand) {
         logger.info(
-            '✅ /role is included in the registered global commands.',
+            '✅ /youtube is included in the registered global commands.',
         );
     } else {
         logger.error(
-            '❌ /role is NOT included in the registered global commands.',
+            '❌ /youtube is NOT included in the registered global commands.',
         );
     }
 }
@@ -492,6 +532,28 @@ export async function registerCommands(
         logger.info(
             `Collected ${commands.length} commands and ${totalSubcommands} subcommands for registration.`,
         );
+
+        /*
+         * Explicitly verify YouTube before sending
+         * the command payload to Discord.
+         */
+
+        const youtubeCommand =
+            commands.find(
+                command =>
+                    command.name ===
+                    'youtube',
+            );
+
+        if (youtubeCommand) {
+            logger.info(
+                '✅ YouTube command verified in registration payload.',
+            );
+        } else {
+            logger.error(
+                '❌ YouTube command is missing from the registration payload.',
+            );
+        }
 
         validateCommands(commands);
 
@@ -525,7 +587,9 @@ export async function registerCommands(
     } catch (error) {
         logger.error(
             '❌ Error registering commands:',
-            error,
+            error?.stack ||
+                error?.message ||
+                error,
         );
 
         throw error;
@@ -548,7 +612,8 @@ export async function reloadCommand(
     if (!command) {
         return {
             success: false,
-            message: `Command "${commandName}" not found`,
+            message:
+                `Command "${commandName}" not found`,
         };
     }
 
@@ -574,7 +639,7 @@ export async function reloadCommand(
             );
 
         const newCommand =
-            newCommandModule.default ||
+            newCommandModule.default ??
             newCommandModule;
 
         if (
