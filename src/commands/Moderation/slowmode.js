@@ -1,96 +1,73 @@
 import {
-    SlashCommandBuilder,
-    PermissionFlagsBits,
+  SlashCommandBuilder,
+  PermissionFlagsBits,
+  MessageFlags,
 } from 'discord.js';
 
-import { successEmbed } from '../../utils/embeds.js';
-import { logEvent } from '../../utils/moderation.js';
+import { createEmbed } from '../../utils/embeds.js';
 import { logger } from '../../utils/logger.js';
-
+import { InteractionHelper } from '../../utils/interactionHelper.js';
 import {
-    replyUserError,
-    ErrorTypes,
+  replyUserError,
+  ErrorTypes,
 } from '../../utils/errorHandler.js';
-
-// Discord's maximum slowmode is 6 hours.
-const MAX_SLOWMODE_SECONDS = 6 * 60 * 60;
+import { logEvent } from '../../utils/moderation.js';
 
 // ============================================================
-// PARSE DURATION
+// DURATION PARSER
 // ============================================================
 
 function parseDuration(value) {
-    if (!value) {
-        return null;
-    }
+  if (!value) {
+    return null;
+  }
 
-    const input =
-        String(value)
-            .trim()
-            .toLowerCase();
+  const duration = String(value)
+    .trim()
+    .toLowerCase();
 
-    if (input === 'off' || input === 'disable') {
-        return 0;
-    }
+  // Disable slowmode.
+  if (duration === 'off') {
+    return 0;
+  }
 
-    /*
-     * Supported:
-     *
-     * 10s = 10 seconds
-     * 1m  = 1 minute
-     * 1h  = 1 hour
-     * 1d  = 1 day
-     */
+  // Discord's maximum slowmode is 6 hours.
+  if (duration === 'max') {
+    return 6 * 60 * 60;
+  }
 
-    const match =
-        input.match(/^(\d+(?:\.\d+)?)(s|m|h|d)$/);
+  const match = duration.match(
+    /^(\d+)(s|m|h)$/
+  );
 
-    if (!match) {
-        return null;
-    }
+  if (!match) {
+    return null;
+  }
 
-    const amount =
-        Number(match[1]);
+  const amount = Number(match[1]);
+  const unit = match[2];
 
-    const unit =
-        match[2];
+  let seconds;
 
-    if (!Number.isFinite(amount) || amount <= 0) {
-        return null;
-    }
+  if (unit === 's') {
+    seconds = amount;
+  } else if (unit === 'm') {
+    seconds = amount * 60;
+  } else if (unit === 'h') {
+    seconds = amount * 60 * 60;
+  } else {
+    return null;
+  }
 
-    let seconds;
+  // Discord allows 0-21600 seconds.
+  if (
+    seconds < 0 ||
+    seconds > 21600
+  ) {
+    return null;
+  }
 
-    switch (unit) {
-        case 's':
-            seconds = amount;
-            break;
-
-        case 'm':
-            seconds = amount * 60;
-            break;
-
-        case 'h':
-            seconds = amount * 60 * 60;
-            break;
-
-        case 'd':
-            seconds = amount * 60 * 60 * 24;
-            break;
-
-        default:
-            return null;
-    }
-
-    if (!Number.isFinite(seconds)) {
-        return null;
-    }
-
-    if (!Number.isInteger(seconds)) {
-        return null;
-    }
-
-    return seconds;
+  return seconds;
 }
 
 // ============================================================
@@ -98,25 +75,29 @@ function parseDuration(value) {
 // ============================================================
 
 function formatDuration(seconds) {
-    if (seconds === 0) {
-        return 'off';
-    }
+  if (seconds === 0) {
+    return 'disabled';
+  }
 
-    if (seconds < 60) {
-        return `${seconds} second${seconds === 1 ? '' : 's'}`;
-    }
+  if (seconds === 21600) {
+    return '6 hours';
+  }
 
-    if (seconds < 60 * 60) {
-        const minutes =
-            seconds / 60;
+  if (seconds % 3600 === 0) {
+    return `${seconds / 3600} hour${
+      seconds / 3600 === 1 ? '' : 's'
+    }`;
+  }
 
-        return `${minutes} minute${minutes === 1 ? '' : 's'}`;
-    }
+  if (seconds % 60 === 0) {
+    return `${seconds / 60} minute${
+      seconds / 60 === 1 ? '' : 's'
+    }`;
+  }
 
-    const hours =
-        seconds / (60 * 60);
-
-    return `${hours} hour${hours === 1 ? '' : 's'}`;
+  return `${seconds} second${
+    seconds === 1 ? '' : 's'
+  }`;
 }
 
 // ============================================================
@@ -124,205 +105,281 @@ function formatDuration(seconds) {
 // ============================================================
 
 export default {
-    data: new SlashCommandBuilder()
-        .setName('slowmode')
-        .setDescription('Set the slowmode for the current channel')
-        .addStringOption((option) =>
-            option
-                .setName('duration')
-                .setDescription(
-                    'Duration such as 10s, 1m, 1h, or off'
-                )
-                .setRequired(true)
+  data: new SlashCommandBuilder()
+    .setName('slowmode')
+    .setDescription('Set the slowmode for this channel')
+    .addStringOption((option) =>
+      option
+        .setName('duration')
+        .setDescription(
+          'Examples: 10s, 1m, 1h, max, or off'
         )
-        .setDefaultMemberPermissions(
-            PermissionFlagsBits.ManageChannels
-        ),
+        .setRequired(true)
+    )
+    .setDefaultMemberPermissions(
+      PermissionFlagsBits.ManageMessages
+    ),
 
-    category: 'moderation',
+  category: 'moderation',
 
-    abuseProtection: {
-        maxAttempts: 10,
-        windowMs: 60_000,
-    },
+  abuseProtection: {
+    maxAttempts: 10,
+    windowMs: 60_000,
+  },
 
-    // ========================================================
-    // /slowmode
-    // ========================================================
+  // ==========================================================
+  // EXECUTE
+  // ==========================================================
 
-    async execute(interaction, config, client) {
-        const channel =
-            interaction.channel;
+  async execute(interaction, config, client) {
+    const isPrefixCommand =
+      interaction._isPrefixCommand === true;
 
-        if (!interaction.guild || !channel) {
-            return await replyUserError(interaction, {
-                type: ErrorTypes.VALIDATION,
-                message:
-                    'This command can only be used in a server.',
-            });
+    try {
+      // --------------------------------------------------------
+      // GET DURATION
+      // --------------------------------------------------------
+
+      const durationInput =
+        interaction.options.getString(
+          'duration'
+        );
+
+      const seconds =
+        parseDuration(
+          durationInput
+        );
+
+      // --------------------------------------------------------
+      // VALIDATION
+      // --------------------------------------------------------
+
+      if (seconds === null) {
+        const errorMessage =
+          'Invalid duration. Use a format such as `10s`, `1m`, `1h`, or `max`. Use `off` to disable slowmode.';
+
+        if (isPrefixCommand) {
+          await interaction.reply({
+            embeds: [
+              createEmbed({
+                title: 'Invalid Input',
+                description: errorMessage,
+                color: 'error',
+              }),
+            ],
+          });
+
+          return;
         }
 
-        const durationInput =
-            interaction.options.getString('duration');
+        await InteractionHelper.safeDefer(
+          interaction,
+          {
+            flags: MessageFlags.Ephemeral,
+          }
+        );
 
-        const seconds =
-            parseDuration(durationInput);
+        await replyUserError(
+          interaction,
+          {
+            type: ErrorTypes.VALIDATION,
+            message: errorMessage,
+          }
+        );
 
-        // ====================================================
-        // INVALID FORMAT
-        // ====================================================
+        return;
+      }
 
-        if (seconds === null) {
-            return await replyUserError(interaction, {
-                type: ErrorTypes.VALIDATION,
-                message:
-                    'Invalid duration. Use a format such as `10s`, `1m`, `1h`, or `1d`. Use `off` to disable slowmode.',
-            });
+      // --------------------------------------------------------
+      // CHANNEL CHECK
+      // --------------------------------------------------------
+
+      const channel =
+        interaction.channel;
+
+      if (
+        !channel ||
+        typeof channel.setRateLimitPerUser !==
+          'function'
+      ) {
+        const errorMessage =
+          'Slowmode cannot be changed in this channel.';
+
+        if (isPrefixCommand) {
+          await interaction.reply({
+            embeds: [
+              createEmbed({
+                title: 'Unable to Set Slowmode',
+                description: errorMessage,
+                color: 'error',
+              }),
+            ],
+          });
+
+          return;
         }
 
-        // ====================================================
-        // DISCORD MAXIMUM
-        // ====================================================
+        await InteractionHelper.safeDefer(
+          interaction,
+          {
+            flags: MessageFlags.Ephemeral,
+          }
+        );
 
-        if (
-            seconds >
-            MAX_SLOWMODE_SECONDS
-        ) {
-            return await replyUserError(interaction, {
-                type: ErrorTypes.VALIDATION,
-                message:
-                    'Discord only allows slowmode up to **6 hours**. Please use a duration between `1s` and `6h`.',
-            });
+        await replyUserError(
+          interaction,
+          {
+            type: ErrorTypes.UNKNOWN,
+            message: errorMessage,
+          }
+        );
+
+        return;
+      }
+
+      // --------------------------------------------------------
+      // SET SLOWMODE
+      // --------------------------------------------------------
+
+      await channel.setRateLimitPerUser(
+        seconds,
+        `Slowmode changed by ${
+          interaction.user.tag
+        }`
+      );
+
+      const durationText =
+        formatDuration(seconds);
+
+      // --------------------------------------------------------
+      // LOG MODERATION ACTION
+      // --------------------------------------------------------
+
+      await logEvent({
+        client,
+        guild: interaction.guild,
+        event: {
+          action:
+            seconds === 0
+              ? 'Channel Slowmode Disabled'
+              : 'Channel Slowmode Updated',
+
+          target:
+            `${channel} (${channel.id})`,
+
+          executor:
+            `${interaction.user.tag} (${interaction.user.id})`,
+
+          reason:
+            seconds === 0
+              ? 'Slowmode disabled'
+              : `Slowmode set to ${durationText}`,
+
+          duration:
+            durationText,
+
+          metadata: {
+            channelId:
+              channel.id,
+
+            slowmodeSeconds:
+              seconds,
+
+            moderatorId:
+              interaction.user.id,
+
+            commandType:
+              isPrefixCommand
+                ? 'prefix'
+                : 'slash',
+          },
+        },
+      });
+
+      // --------------------------------------------------------
+      // RESPONSE
+      // --------------------------------------------------------
+
+      const embed =
+        createEmbed({
+          title:
+            seconds === 0
+              ? '🔓 Slowmode Disabled'
+              : '🐌 Slowmode Updated',
+
+          description:
+            seconds === 0
+              ? `Slowmode has been **disabled** in ${channel}.`
+              : `Slowmode in ${channel} has been set to **${durationText}**.`,
+
+          color:
+            'success',
+        });
+
+      if (isPrefixCommand) {
+        await interaction.reply({
+          embeds: [embed],
+        });
+
+        return;
+      }
+
+      await InteractionHelper.safeDefer(
+        interaction,
+        {
+          flags: MessageFlags.Ephemeral,
         }
+      );
 
-        // ====================================================
-        // BOT PERMISSION
-        // ====================================================
-
-        const botMember =
-            interaction.guild.members.me;
-
-        if (
-            !botMember ||
-            !botMember.permissionsIn(channel).has(
-                PermissionFlagsBits.ManageChannels
-            )
-        ) {
-            return await replyUserError(interaction, {
-                type: ErrorTypes.PERMISSION,
-                message:
-                    'I need the **Manage Channels** permission in this channel to change slowmode.',
-            });
+      await InteractionHelper.safeEditReply(
+        interaction,
+        {
+          embeds: [embed],
+          flags: MessageFlags.Ephemeral,
         }
+      );
 
-        try {
-            const previousSeconds =
-                channel.rateLimitPerUser || 0;
+      // Delete the slash-command response after 3 seconds.
+      setTimeout(() => {
+        interaction
+          .deleteReply()
+          .catch(() => {});
+      }, 3000);
+    } catch (error) {
+      logger.error(
+        'Slowmode command error:',
+        error
+      );
 
-            // ==================================================
-            // NO CHANGE
-            // ==================================================
+      const errorMessage =
+        'An unexpected error occurred while changing the channel slowmode.';
 
-            if (
-                previousSeconds === seconds
-            ) {
-                return await replyUserError(interaction, {
-                    type: ErrorTypes.VALIDATION,
-                    message:
-                        seconds === 0
-                            ? 'Slowmode is already disabled in this channel.'
-                            : `Slowmode is already set to **${formatDuration(seconds)}**.`,
-                });
-            }
+      if (
+        interaction._isPrefixCommand === true
+      ) {
+        await interaction
+          .reply({
+            embeds: [
+              createEmbed({
+                title: 'Error',
+                description:
+                  errorMessage,
+                color: 'error',
+              }),
+            ],
+          })
+          .catch(() => {});
 
-            // ==================================================
-            // SET SLOWMODE
-            // ==================================================
+        return;
+      }
 
-            await channel.setRateLimitPerUser(
-                seconds,
-                `Slowmode changed by ${interaction.user.tag}`
-            );
-
-            // ==================================================
-            // LOG
-            // ==================================================
-
-            await logEvent({
-                client,
-                guild: interaction.guild,
-                event: {
-                    action:
-                        seconds === 0
-                            ? 'Slowmode Disabled'
-                            : 'Slowmode Updated',
-
-                    target:
-                        `${channel.name} (${channel.id})`,
-
-                    executor:
-                        `${interaction.user.tag} (${interaction.user.id})`,
-
-                    reason:
-                        seconds === 0
-                            ? 'Slowmode disabled manually.'
-                            : `Slowmode set to ${formatDuration(seconds)}.`,
-
-                    metadata: {
-                        channelId:
-                            channel.id,
-
-                        moderatorId:
-                            interaction.user.id,
-
-                        previousSlowmode:
-                            previousSeconds,
-
-                        newSlowmode:
-                            seconds,
-
-                        duration:
-                            seconds === 0
-                                ? 'off'
-                                : formatDuration(seconds),
-
-                        commandType:
-                            interaction._isPrefixCommand
-                                ? 'prefix'
-                                : 'slash',
-                    },
-                },
-            });
-
-            // ==================================================
-            // RESPONSE
-            // ==================================================
-
-            const embed =
-                seconds === 0
-                    ? successEmbed(
-                        'Slowmode Disabled',
-                        `Slowmode has been disabled in ${channel}.`
-                    )
-                    : successEmbed(
-                        'Slowmode Updated',
-                        `Slowmode has been set to **${formatDuration(seconds)}** in ${channel}.`
-                    );
-
-            await interaction.reply({
-                embeds: [embed],
-            });
-        } catch (error) {
-            logger.error(
-                'Slowmode command error:',
-                error
-            );
-
-            await replyUserError(interaction, {
-                type: ErrorTypes.UNKNOWN,
-                message:
-                    'I could not change the slowmode for this channel. Make sure I have **Manage Channels** permission.',
-            });
+      await replyUserError(
+        interaction,
+        {
+          type: ErrorTypes.UNKNOWN,
+          message: errorMessage,
         }
-    },
+      ).catch(() => {});
+    }
+  },
 };
