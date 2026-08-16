@@ -7,7 +7,7 @@ import {
     buildPlayerButtonRows,
 } from './musicEmbeds.js';
 
-const UPDATE_INTERVAL_MS = 15 * 1000;
+const UPDATE_INTERVAL_MS = 1000;
 const IDLE_DISCONNECT_MS = 30 * 1000;
 
 async function editOrSendPlayerMessage(client, guildData, channelId, embed, components) {
@@ -61,6 +61,7 @@ export async function refreshPlayerMessage(client, guildId) {
 function startUpdateInterval(client, guildId) {
     const guildData = getGuildMusicData(guildId);
     clearUpdateInterval(guildData);
+
     guildData.updateInterval = setInterval(() => {
         refreshPlayerMessage(client, guildId);
     }, UPDATE_INTERVAL_MS);
