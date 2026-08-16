@@ -9,6 +9,7 @@ import {
 import botConfig from '../config/bot.js';
 
 import { handleApplicationModal } from '../commands/Community/apply.js';
+import { handleMusicSeekModal } from '../handlers/musicButtonHandler.js';
 
 import {
     handleInteractionError,
@@ -804,6 +805,26 @@ export default {
                     if (
                         interaction.isModalSubmit()
                     ) {
+                        // ====================================================
+                        // MUSIC SEEK MODAL
+                        // ====================================================
+
+                        if (
+                            interaction.customId ===
+                            'music_seek_modal'
+                        ) {
+                            await handleMusicSeekModal(
+                                interaction,
+                                client
+                            );
+
+                            return;
+                        }
+
+                        // ====================================================
+                        // APPLICATION MODAL
+                        // ====================================================
+
                         if (
                             interaction.customId.startsWith(
                                 'app_modal_'
@@ -815,6 +836,10 @@ export default {
 
                             return;
                         }
+
+                        // ====================================================
+                        // COLLECTOR / SPECIAL MODALS
+                        // ====================================================
 
                         if (
                             interaction.customId.startsWith(
