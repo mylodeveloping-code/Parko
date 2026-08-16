@@ -21,8 +21,18 @@ export default {
     .addIntegerOption((option) =>
       option
         .setName('amount')
-        .setDescription('Number of messages (1-100)')
+        .setDescription('Number of messages to delete (1-100)')
+        .setMinValue(1)
+        .setMaxValue(100)
         .setRequired(true)
+    )
+    .addUserOption((option) =>
+      option
+        .setName('target')
+        .setDescription(
+          'Optional user whose messages should be deleted'
+        )
+        .setRequired(false)
     )
     .setDefaultMemberPermissions(
       PermissionFlagsBits.ManageMessages
@@ -58,9 +68,17 @@ export default {
     const amount =
       interaction.options.getInteger('amount');
 
-    const channel = interaction.channel;
+    const target =
+      interaction.options.getUser('target');
 
-    if (amount < 1 || amount > 100) {
+    const channel =
+      interaction.channel;
+
+    if (
+      !Number.isInteger(amount) ||
+      amount < 1 ||
+      amount > 100
+    ) {
       return await replyUserError(interaction, {
         type: ErrorTypes.VALIDATION,
         message:
@@ -69,44 +87,96 @@ export default {
     }
 
     try {
-      // /purge simply deletes the requested number
-      // of messages. There is no command message
-      // that needs to be skipped.
+      let messagesToDelete;
 
-      const fetched =
-        await channel.messages.fetch({
-          limit: amount,
-        });
+      // ========================================================
+      // NORMAL PURGE
+      // ========================================================
 
-      const deleted =
-        await channel.bulkDelete(
-          fetched,
-          true
-        );
+      if (!target) {
+        const fetched =
+          await channel.messages.fetch({
+            limit: amount,
+          });
 
-      const deletedCount =
-        deleted.size;
+        messagesToDelete =
+          fetched;
+      }
+
+      // ========================================================
+      // TARGETED PURGE
+      // ========================================================
+
+      else {
+        messagesToDelete =
+          await findMessagesByUser(
+            channel,
+            target.id,
+            amount
+          );
+      }
+
+      // ========================================================
+      // DELETE
+      // ========================================================
+
+      let deletedCount = 0;
+
+      if (messagesToDelete.size > 0) {
+        const deleted =
+          await channel.bulkDelete(
+            messagesToDelete,
+            true
+          );
+
+        deletedCount =
+          deleted.size;
+      }
+
+      // ========================================================
+      // LOG
+      // ========================================================
+
+      const targetText = target
+        ? `${target.tag} (${target.id})`
+        : 'All users';
 
       await logEvent({
         client,
         guild: interaction.guild,
         event: {
           action: 'Messages Purged',
+
           target:
             `${channel} (${deletedCount} messages)`,
+
           executor:
             `${interaction.user.tag} (${interaction.user.id})`,
+
           reason:
-            `Deleted ${deletedCount} messages`,
+            target
+              ? `Deleted ${deletedCount} messages from ${target.tag}`
+              : `Deleted ${deletedCount} messages`,
+
           metadata: {
             channelId: channel.id,
             messageCount: deletedCount,
             requestedAmount: amount,
             moderatorId: interaction.user.id,
             commandType: 'slash',
+            targetUserId: target?.id || null,
+            targetUsername: target?.tag || null,
           },
         },
       });
+
+      // ========================================================
+      // RESPONSE
+      // ========================================================
+
+      const description = target
+        ? `Deleted **${deletedCount}** message${deletedCount === 1 ? '' : 's'} from **${target.tag}** in ${channel}.`
+        : `Deleted **${deletedCount}** message${deletedCount === 1 ? '' : 's'} in ${channel}.`;
 
       await InteractionHelper.safeEditReply(
         interaction,
@@ -114,7 +184,7 @@ export default {
           embeds: [
             successEmbed(
               'Messages Purged',
-              `Deleted ${deletedCount} messages in ${channel}.`
+              description
             ),
           ],
           flags: MessageFlags.Ephemeral,
@@ -150,11 +220,12 @@ export default {
       return;
     }
 
-    const amount = Number(
-      Array.isArray(args)
-        ? args[0]
-        : args
-    );
+    if (!Array.isArray(args)) {
+      return;
+    }
+
+    const amount =
+      Number(args[0]);
 
     if (
       !Number.isInteger(amount) ||
@@ -164,48 +235,118 @@ export default {
       return;
     }
 
-    const channel = message.channel;
+    const channel =
+      message.channel;
+
+    // ========================================================
+    // FIND TARGET
+    // ========================================================
+
+    let targetId = null;
+    let targetUser = null;
+
+    if (args.length >= 2) {
+      const targetInput =
+        String(args[1]).trim();
+
+      targetId =
+        extractUserId(targetInput);
+
+      if (targetId) {
+        targetUser =
+          await client.users
+            .fetch(targetId)
+            .catch(() => null);
+      }
+
+      /*
+       * If it wasn't a mention or ID, try finding
+       * the member by username/display name.
+       */
+
+      if (!targetUser) {
+        const members =
+          await message.guild.members.fetch();
+
+        const search =
+          targetInput
+            .replace(/^@/, '')
+            .toLowerCase();
+
+        const member =
+          members.find((member) =>
+            member.user.username
+              .toLowerCase() === search ||
+            member.displayName
+              .toLowerCase() === search ||
+            member.user.tag
+              .toLowerCase() === search
+          );
+
+        if (member) {
+          targetUser =
+            member.user;
+
+          targetId =
+            member.user.id;
+        }
+      }
+
+      if (!targetId || !targetUser) {
+        return;
+      }
+    }
 
     try {
-      /*
-       * IMPORTANT:
-       *
-       * We DO NOT fetch the newest messages normally.
-       *
-       * We specifically ask Discord for messages BEFORE
-       * the .purge command's message ID.
-       *
-       * Therefore the .purge message itself can NEVER
-       * be included in the purge.
-       */
+      let messagesToDelete;
 
-      const messagesBeforeCommand =
-        await channel.messages.fetch({
-          limit: amount,
-          before: message.id,
-        });
+      // ========================================================
+      // NORMAL PURGE
+      // ========================================================
 
-      /*
-       * Discord returns newest -> oldest.
-       *
-       * We only want the exact number requested.
-       */
+      if (!targetId) {
+        /*
+         * We specifically fetch messages BEFORE
+         * the .purge command message.
+         *
+         * This prevents the command itself from
+         * being included in the purge.
+         */
 
-      const messagesToDelete =
-        messagesBeforeCommand.first(amount);
+        const messagesBeforeCommand =
+          await channel.messages.fetch({
+            limit: amount,
+            before: message.id,
+          });
 
-      /*
-       * ========================================================
-       * STEP 1:
-       * DELETE THE REQUESTED MESSAGES
-       * ========================================================
-       *
-       * The .purge message is NOT in this collection.
-       */
+        messagesToDelete =
+          messagesBeforeCommand.first(amount);
+      }
+
+      // ========================================================
+      // TARGETED PURGE
+      // ========================================================
+
+      else {
+        messagesToDelete =
+          await findMessagesByUser(
+            channel,
+            targetId,
+            amount,
+            message.id
+          );
+      }
+
+      // ========================================================
+      // DELETE
+      // ========================================================
 
       let deletedCount = 0;
 
-      if (messagesToDelete.length > 0) {
+      if (
+        messagesToDelete &&
+        messagesToDelete.size > 0
+      ) {
         const deleted =
           await channel.bulkDelete(
             messagesToDelete,
@@ -216,12 +357,9 @@ export default {
           deleted.size;
       }
 
-      /*
-       * ========================================================
-       * STEP 2:
-       * REACT TO THE .purge MESSAGE
-       * ========================================================
-       */
+      // ========================================================
+      // REACT
+      // ========================================================
 
       try {
         await message.react('👍');
@@ -232,23 +370,17 @@ export default {
         );
       }
 
-      /*
-       * ========================================================
-       * STEP 3:
-       * WAIT 2 SECONDS
-       * ========================================================
-       */
+      // ========================================================
+      // WAIT
+      // ========================================================
 
       await new Promise((resolve) =>
         setTimeout(resolve, 2000)
       );
 
-      /*
-       * ========================================================
-       * STEP 4:
-       * DELETE THE .purge MESSAGE
-       * ========================================================
-       */
+      // ========================================================
+      // DELETE COMMAND MESSAGE
+      // ========================================================
 
       try {
         await message.delete();
@@ -259,12 +391,9 @@ export default {
         );
       }
 
-      /*
-       * ========================================================
-       * STEP 5:
-       * LOG
-       * ========================================================
-       */
+      // ========================================================
+      // LOG
+      // ========================================================
 
       await logEvent({
         client,
@@ -279,7 +408,9 @@ export default {
             `${message.author.tag} (${message.author.id})`,
 
           reason:
-            `Deleted ${deletedCount} messages`,
+            targetUser
+              ? `Deleted ${deletedCount} messages from ${targetUser.tag}`
+              : `Deleted ${deletedCount} messages`,
 
           metadata: {
             channelId: channel.id,
@@ -287,6 +418,8 @@ export default {
             requestedAmount: amount,
             moderatorId: message.author.id,
             commandType: 'prefix',
+            targetUserId: targetUser?.id || null,
+            targetUsername: targetUser?.tag || null,
           },
         },
       });
@@ -299,3 +432,146 @@ export default {
     }
   },
 };
+
+// ============================================================
+// FIND MESSAGES BY USER
+// ============================================================
+
+async function findMessagesByUser(
+  channel,
+  userId,
+  amount,
+  beforeMessageId = null
+) {
+  const matchingMessages =
+    [];
+
+  let lastMessageId =
+    beforeMessageId;
+
+  /*
+   * Discord fetches a maximum of 100 messages
+   * per request.
+   *
+   * We continue fetching older messages until:
+   *
+   * 1. We find the requested amount.
+   * 2. There are no more messages.
+   *
+   * We stop after 10,000 messages to avoid
+   * accidentally scanning an enormous channel.
+   */
+
+  const MAX_MESSAGES_TO_SCAN =
+    10_000;
+
+  let scanned =
+    0;
+
+  while (
+    matchingMessages.length < amount &&
+    scanned < MAX_MESSAGES_TO_SCAN
+  ) {
+    const fetchOptions = {
+      limit: 100,
+    };
+
+    if (lastMessageId) {
+      fetchOptions.before =
+        lastMessageId;
+    }
+
+    const batch =
+      await channel.messages.fetch(
+        fetchOptions
+      );
+
+    if (batch.size === 0) {
+      break;
+    }
+
+    scanned +=
+      batch.size;
+
+    for (const msg of batch.values()) {
+      if (
+        msg.author?.id === userId
+      ) {
+        matchingMessages.push(
+          msg
+        );
+
+        if (
+          matchingMessages.length >=
+          amount
+        ) {
+          break;
+        }
+      }
+    }
+
+    const oldestMessage =
+      batch.last();
+
+    if (!oldestMessage) {
+      break;
+    }
+
+    lastMessageId =
+      oldestMessage.id;
+
+    /*
+     * If fewer than 100 messages were returned,
+     * we've reached the beginning of the channel.
+     */
+
+    if (batch.size < 100) {
+      break;
+    }
+  }
+
+  /*
+   * Convert the array into a Collection-like
+   * structure that bulkDelete accepts.
+   */
+
+  const collection =
+    new Map();
+
+  for (const message of matchingMessages) {
+    collection.set(
+      message.id,
+      message
+    );
+  }
+
+  return collection;
+}
+
+// ============================================================
+// EXTRACT USER ID
+// ============================================================
+
+function extractUserId(input) {
+  if (!input) {
+    return null;
+  }
+
+  const value =
+    String(input).trim();
+
+  // <@123456789>
+  const mentionMatch =
+    value.match(/^<@!?(\d+)>$/);
+
+  if (mentionMatch) {
+    return mentionMatch[1];
+  }
+
+  // 123456789
+  if (/^\d+$/.test(value)) {
+    return value;
+  }
+
+  return null;
+}
