@@ -11,20 +11,37 @@ const __dirname = path.dirname(__filename);
 const MAX_COMMANDS = 100;
 const COMMAND_COUNT_WARN_THRESHOLD = 90;
 
+function getCommandJson(commandData) {
+    if (
+        commandData &&
+        typeof commandData.toJSON === 'function'
+    ) {
+        return commandData.toJSON();
+    }
+
+    return commandData || {};
+}
+
 function getSubcommandInfo(commandData) {
     const subcommands = [];
+    const data = getCommandJson(commandData);
 
-    if (commandData.options) {
-        for (const option of commandData.options) {
-            if (option.type === 1) {
-                subcommands.push(option.name);
-            } else if (option.type === 2 && option.options) {
-                for (const subOption of option.options) {
-                    if (subOption.type === 1) {
-                        subcommands.push(
-                            `${option.name}/${subOption.name}`,
-                        );
-                    }
+    if (!Array.isArray(data.options)) {
+        return subcommands;
+    }
+
+    for (const option of data.options) {
+        if (option.type === 1) {
+            subcommands.push(option.name);
+        } else if (
+            option.type === 2 &&
+            Array.isArray(option.options)
+        ) {
+            for (const subOption of option.options) {
+                if (subOption.type === 1) {
+                    subcommands.push(
+                        `${option.name}/${subOption.name}`,
+                    );
                 }
             }
         }
@@ -33,21 +50,32 @@ function getSubcommandInfo(commandData) {
     return subcommands;
 }
 
-async function getAllFiles(directory, fileList = []) {
+async function getAllFiles(
+    directory,
+    fileList = [],
+) {
     const files = await fs.readdir(directory, {
         withFileTypes: true,
     });
 
     for (const file of files) {
-        const filePath = path.join(directory, file.name);
+        const filePath = path.join(
+            directory,
+            file.name,
+        );
 
         if (file.isDirectory()) {
             if (file.name === 'modules') {
                 continue;
             }
 
-            await getAllFiles(filePath, fileList);
-        } else if (file.name.endsWith('.js')) {
+            await getAllFiles(
+                filePath,
+                fileList,
+            );
+        } else if (
+            file.name.endsWith('.js')
+        ) {
             fileList.push(filePath);
         }
     }
@@ -63,7 +91,8 @@ export async function loadCommands(client) {
         '../../commands',
     );
 
-    const commandFiles = await getAllFiles(commandsPath);
+    const commandFiles =
+        await getAllFiles(commandsPath);
 
     logger.info(
         `Found ${commandFiles.length} command files to load`,
@@ -76,15 +105,20 @@ export async function loadCommands(client) {
             const normalizedPath =
                 filePath.replace(/\\/g, '/');
 
-            const commandModule = await import(
-                pathToFileURL(filePath).href
-            );
+            const commandModule =
+                await import(
+                    pathToFileURL(filePath).href
+                );
 
             const command =
                 commandModule.default ||
                 commandModule;
 
-            if (!command.data || !command.execute) {
+            if (
+                !command ||
+                !command.data ||
+                typeof command.execute !== 'function'
+            ) {
                 logger.warn(
                     `Command at ${filePath} is missing required "data" or "execute" property.`,
                 );
@@ -93,12 +127,10 @@ export async function loadCommands(client) {
             }
 
             const commandData =
-                typeof command.data.toJSON === 'function'
-                    ? command.data.toJSON()
-                    : command.data;
+                getCommandJson(command.data);
 
             const primaryCommandName =
-                commandData.name;
+                commandData.name?.toLowerCase();
 
             if (!primaryCommandName) {
                 logger.warn(
@@ -117,26 +149,32 @@ export async function loadCommands(client) {
             command.category = category;
             command.filePath = normalizedPath;
 
+            /*
+             * Store the normalized command name.
+             *
+             * Prefix commands use this collection to find
+             * commands such as .ping, .help, .role, etc.
+             */
             if (
-                !uniqueCommandNames.has(
+                uniqueCommandNames.has(
                     primaryCommandName,
                 )
             ) {
-                uniqueCommandNames.add(
-                    primaryCommandName,
-                );
-
-                client.commands.set(
-                    primaryCommandName,
-                    command,
-                );
-            } else {
                 logger.warn(
                     `Duplicate command detected: ${primaryCommandName} at ${filePath}`,
                 );
 
                 continue;
             }
+
+            uniqueCommandNames.add(
+                primaryCommandName,
+            );
+
+            client.commands.set(
+                primaryCommandName,
+                command,
+            );
 
             logger.info(
                 `✅ Loaded command: ${primaryCommandName} from ${normalizedPath} (category: ${category})`,
@@ -181,30 +219,27 @@ function collectCommandPayloads(client) {
     const registeredNames = new Set();
 
     for (const command of client.commands.values()) {
-        if (
-            !command.data ||
-            typeof command.data.toJSON !== 'function'
-        ) {
+        if (!command?.data) {
             logger.warn(
-                `Command is missing data or toJSON method.`,
+                'Command is missing data.',
             );
 
             continue;
         }
 
         const commandJson =
-            command.data.toJSON();
+            getCommandJson(command.data);
 
-        const commandName =
-            commandJson.name;
-
-        if (!commandName) {
+        if (!commandJson?.name) {
             logger.warn(
                 'Skipping command without a name.',
             );
 
             continue;
         }
+
+        const commandName =
+            commandJson.name.toLowerCase();
 
         if (
             registeredNames.has(commandName)
@@ -258,7 +293,7 @@ function validateCommands(commands) {
             );
         }
 
-        if (!cmd.options) {
+        if (!Array.isArray(cmd.options)) {
             continue;
         }
 
@@ -289,7 +324,9 @@ function validateCommands(commands) {
         );
 
         for (const error of validationErrors) {
-            logger.error(`  - ${error}`);
+            logger.error(
+                `  - ${error}`,
+            );
         }
 
         throw new Error(
@@ -298,7 +335,9 @@ function validateCommands(commands) {
     }
 }
 
-function prepareCommandsForRegistration(commands) {
+function prepareCommandsForRegistration(
+    commands,
+) {
     if (
         commands.length >=
         COMMAND_COUNT_WARN_THRESHOLD
@@ -309,8 +348,7 @@ function prepareCommandsForRegistration(commands) {
     }
 
     if (
-        commands.length <=
-        MAX_COMMANDS
+        commands.length <= MAX_COMMANDS
     ) {
         return commands;
     }
@@ -448,15 +486,14 @@ export async function registerCommands(
         const {
             commands,
             totalSubcommands,
-        } = collectCommandPayloads(client);
+        } =
+            collectCommandPayloads(client);
 
         logger.info(
             `Collected ${commands.length} commands and ${totalSubcommands} subcommands for registration.`,
         );
 
-        validateCommands(
-            commands,
-        );
+        validateCommands(commands);
 
         const commandsToRegister =
             prepareCommandsForRegistration(
@@ -499,9 +536,13 @@ export async function reloadCommand(
     client,
     commandName,
 ) {
+    const normalizedName =
+        String(commandName)
+            .toLowerCase();
+
     const command =
         client.commands.get(
-            commandName,
+            normalizedName,
         );
 
     if (!command) {
@@ -536,18 +577,36 @@ export async function reloadCommand(
             newCommandModule.default ||
             newCommandModule;
 
+        if (
+            !newCommand ||
+            !newCommand.data ||
+            typeof newCommand.execute !==
+                'function'
+        ) {
+            throw new Error(
+                'Reloaded command is missing data or execute.',
+            );
+        }
+
+        newCommand.category =
+            command.category;
+
+        newCommand.filePath =
+            command.filePath;
+
         client.commands.set(
-            commandName,
+            normalizedName,
             newCommand,
         );
 
         logger.info(
-            `Reloaded command: ${commandName}`,
+            `Reloaded command: ${normalizedName}`,
         );
 
         return {
             success: true,
-            message: `Successfully reloaded command "${commandName}"`,
+            message:
+                `Successfully reloaded command "${commandName}"`,
         };
     } catch (error) {
         logger.error(
@@ -557,7 +616,8 @@ export async function reloadCommand(
 
         return {
             success: false,
-            message: `Error reloading command: ${error.message}`,
+            message:
+                `Error reloading command: ${error.message}`,
         };
     }
 }

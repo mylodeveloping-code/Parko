@@ -2,35 +2,68 @@ import { mapArgumentsToOptions } from './prefixParser.js';
 import { handleInteractionError } from './errorHandler.js';
 import { logger } from './logger.js';
 import { InteractionHelper } from './interactionHelper.js';
-import { SLASH_ONLY_COMMANDS } from '../config/commands/prefixRestrictions.js';
+import {
+    SLASH_ONLY_COMMANDS,
+} from '../config/commands/prefixRestrictions.js';
 import { getCommandPrefix } from '../config/bot.js';
 import {
     ResponseCoordinator,
     buildPrefixUsage,
 } from './responseCoordinator.js';
-import { enforceDefaultCommandPermissions } from './permissionGuard.js';
+import {
+    enforceDefaultCommandPermissions,
+} from './permissionGuard.js';
 import { isBlacklisted } from './blacklist.js';
 
-export { buildPrefixUsage };
+export {
+    buildPrefixUsage,
+};
 
 function getCommandJson(commandData) {
-    return commandData?.toJSON
-        ? commandData.toJSON()
-        : commandData;
+    if (
+        commandData &&
+        typeof commandData.toJSON === 'function'
+    ) {
+        return commandData.toJSON();
+    }
+
+    return commandData || {};
+}
+
+// ============================================================
+// COMMAND NAME
+// ============================================================
+
+function getCommandName(command) {
+    const data =
+        getCommandJson(command?.data);
+
+    return data?.name
+        ? String(data.name).toLowerCase()
+        : null;
 }
 
 // ============================================================
 // SLASH ACCESS KEY
 // ============================================================
 
-export function resolveSlashAccessKey(interaction) {
+export function resolveSlashAccessKey(
+    interaction,
+) {
     const subcommandGroup =
-        interaction.options.getSubcommandGroup(false);
+        interaction.options.getSubcommandGroup(
+            false,
+        );
 
     const subcommand =
-        interaction.options.getSubcommand(false);
+        interaction.options.getSubcommand(
+            false,
+        );
 
-    if (subcommandGroup && subcommand) {
+    if (
+        subcommandGroup &&
+        subcommand
+    ) {
         return `${interaction.commandName} ${subcommandGroup} ${subcommand}`;
     }
 
@@ -45,9 +78,15 @@ export function resolveSlashAccessKey(interaction) {
 // PREFIX ACCESS KEY
 // ============================================================
 
-export function resolvePrefixAccessKey(commandData, args) {
+export function resolvePrefixAccessKey(
+    commandData,
+    args,
+) {
     const options =
-        mapArgumentsToOptions(args, commandData);
+        mapArgumentsToOptions(
+            args,
+            commandData,
+        );
 
     const subcommand =
         options.getSubcommand();
@@ -62,7 +101,10 @@ export function resolvePrefixAccessKey(commandData, args) {
         return null;
     }
 
-    if (subcommandGroup && subcommand) {
+    if (
+        subcommandGroup &&
+        subcommand
+    ) {
         return `${commandName} ${subcommandGroup} ${subcommand}`;
     }
 
@@ -86,20 +128,26 @@ function resolveUserId(value) {
         String(value).trim();
 
     let match =
-        stringValue.match(/^<@(\d+)>$/);
+        stringValue.match(
+            /^<@(\d+)>$/,
+        );
 
     if (match) {
         return match[1];
     }
 
     match =
-        stringValue.match(/^<@!(\d+)>$/);
+        stringValue.match(
+            /^<@!(\d+)>$/,
+        );
 
     if (match) {
         return match[1];
     }
 
-    if (/^\d+$/.test(stringValue)) {
+    if (
+        /^\d+$/.test(stringValue)
+    ) {
         return stringValue;
     }
 
@@ -115,6 +163,9 @@ export function createMockInteraction(
     commandData,
     args,
 ) {
+    const commandJson =
+        getCommandJson(commandData);
+
     const options =
         mapArgumentsToOptions(
             args,
@@ -125,9 +176,11 @@ export function createMockInteraction(
         Date.now();
 
     const mockInteraction = {
-        user: message.author,
+        user:
+            message.author,
 
-        member: message.member,
+        member:
+            message.member,
 
         get memberPermissions() {
             return (
@@ -136,16 +189,18 @@ export function createMockInteraction(
             );
         },
 
-        channel: message.channel,
+        channel:
+            message.channel,
 
-        guild: message.guild,
+        guild:
+            message.guild,
 
         guildId:
-            message.guild?.id ?? null,
+            message.guild?.id ??
+            null,
 
         commandName:
-            commandData?.name ||
-            commandData?.toJSON?.()?.name ||
+            commandJson?.name ??
             null,
 
         commandId:
@@ -172,32 +227,39 @@ export function createMockInteraction(
                 }
 
                 const userId =
-                    resolveUserId(rawValue);
+                    resolveUserId(
+                        rawValue,
+                    );
 
                 if (!userId) {
                     return null;
                 }
 
                 const cachedMember =
-                    message.guild?.members?.cache?.get(
-                        userId,
-                    );
+                    message.guild
+                        ?.members
+                        ?.cache
+                        ?.get(userId);
 
-                if (cachedMember?.user) {
+                if (
+                    cachedMember?.user
+                ) {
                     return cachedMember.user;
                 }
 
                 const cachedUser =
-                    message.client?.users?.cache?.get(
-                        userId,
-                    );
+                    message.client
+                        ?.users
+                        ?.cache
+                        ?.get(userId);
 
                 if (cachedUser) {
                     return cachedUser;
                 }
 
                 return {
-                    id: userId,
+                    id:
+                        userId,
 
                     username:
                         'Unknown User',
@@ -222,16 +284,19 @@ export function createMockInteraction(
                 }
 
                 const userId =
-                    resolveUserId(rawValue);
+                    resolveUserId(
+                        rawValue,
+                    );
 
                 if (!userId) {
                     return null;
                 }
 
                 const cachedMember =
-                    message.guild?.members?.cache?.get(
-                        userId,
-                    );
+                    message.guild
+                        ?.members
+                        ?.cache
+                        ?.get(userId);
 
                 if (cachedMember) {
                     return cachedMember;
@@ -244,7 +309,10 @@ export function createMockInteraction(
                 const rawValue =
                     options.getString(name);
 
-                if (!rawValue || !message.guild) {
+                if (
+                    !rawValue ||
+                    !message.guild
+                ) {
                     return null;
                 }
 
@@ -267,7 +335,10 @@ export function createMockInteraction(
                 const rawValue =
                     options.getString(name);
 
-                if (!rawValue || !message.guild) {
+                if (
+                    !rawValue ||
+                    !message.guild
+                ) {
                     return null;
                 }
 
@@ -310,8 +381,10 @@ export function createMockInteraction(
                 args.map(
                     (arg, index) => ({
                         name:
-                            commandData
-                                ?.options?.[index]
+                            commandJson
+                                ?.options?.[
+                                index
+                            ]
                                 ?.name ||
                             `arg${index}`,
 
@@ -396,15 +469,21 @@ export function createMockInteraction(
 
     mockInteraction.reply =
         (payload) =>
-            coordinator.respond(payload);
+            coordinator.respond(
+                payload,
+            );
 
     mockInteraction.editReply =
         (payload) =>
-            coordinator.edit(payload);
+            coordinator.edit(
+                payload,
+            );
 
     mockInteraction.followUp =
         (payload) =>
-            coordinator.followUp(payload);
+            coordinator.followUp(
+                payload,
+            );
 
     mockInteraction.deferReply =
         () =>
@@ -424,6 +503,10 @@ export function createMockInteraction(
 export function supportsPrefixExecution(
     command,
 ) {
+    if (!command) {
+        return false;
+    }
+
     if (
         command.prefixOnly === false ||
         command.slashOnly === true
@@ -432,24 +515,35 @@ export function supportsPrefixExecution(
     }
 
     const commandName =
-        command.data?.name?.toLowerCase();
+        getCommandName(command);
 
     if (
         commandName &&
-        SLASH_ONLY_COMMANDS.has(commandName)
+        SLASH_ONLY_COMMANDS.has(
+            commandName,
+        )
     ) {
         return false;
     }
 
-    if (command.messageExecute) {
+    if (
+        typeof command.messageExecute ===
+        'function'
+    ) {
         return true;
     }
 
-    if (command.prefixExecute) {
+    if (
+        typeof command.prefixExecute ===
+        'function'
+    ) {
         return true;
     }
 
-    return !!command.execute;
+    return (
+        typeof command.execute ===
+        'function'
+    );
 }
 
 // ============================================================
@@ -464,6 +558,25 @@ export async function executePrefixCommand(
     prefixOverride = null,
     guildConfig = null,
 ) {
+    if (!command) {
+        logger.warn(
+            'executePrefixCommand was called without a command.',
+        );
+
+        return;
+    }
+
+    if (!message) {
+        logger.warn(
+            'executePrefixCommand was called without a message.',
+        );
+
+        return;
+    }
+
+    const commandName =
+        getCommandName(command);
+
     // ========================================================
     // BLACKLIST CHECK
     // ========================================================
@@ -483,16 +596,6 @@ export async function executePrefixCommand(
     // ========================================================
     // SPECIAL MESSAGE-BASED PREFIX COMMAND
     // ========================================================
-    //
-    // Commands with messageExecute() receive the REAL
-    // Discord message.
-    //
-    // This is required for commands such as .purge because
-    // they need to manipulate the actual command message.
-    //
-    // /purge does NOT come through this function, so its
-    // slash-command behavior remains completely separate.
-    // ========================================================
 
     if (
         typeof command.messageExecute ===
@@ -506,7 +609,7 @@ export async function executePrefixCommand(
             );
         } catch (error) {
             logger.error(
-                `Error executing message-based prefix command ${command.data?.name}:`,
+                `Error executing message-based prefix command ${commandName}:`,
                 error,
             );
         }
@@ -518,12 +621,23 @@ export async function executePrefixCommand(
     // NORMAL PREFIX COMMANDS
     // ========================================================
 
-    const mockInteraction =
-        createMockInteraction(
-            message,
-            command.data,
-            args,
+    let mockInteraction;
+
+    try {
+        mockInteraction =
+            createMockInteraction(
+                message,
+                command.data,
+                args,
+            );
+    } catch (error) {
+        logger.error(
+            `Failed to create prefix interaction for ${commandName}:`,
+            error,
         );
+
+        return;
+    }
 
     const coordinator =
         mockInteraction._responseCoordinator;
@@ -572,23 +686,38 @@ export async function executePrefixCommand(
         }
 
         // ====================================================
-        // EXECUTE NORMAL PREFIX COMMAND
+        // EXECUTE COMMAND
         // ====================================================
 
-        if (command.prefixExecute) {
+        if (
+            typeof command.prefixExecute ===
+            'function'
+        ) {
             await command.prefixExecute(
                 mockInteraction,
                 guildConfig,
                 client,
             );
-        } else {
+
+            return;
+        }
+
+        if (
+            typeof command.execute ===
+            'function'
+        ) {
             await command.execute(
                 mockInteraction,
                 guildConfig,
                 client,
             );
+
+            return;
         }
 
+        logger.error(
+            `Command ${commandName} has no executable handler.`,
+        );
     } catch (error) {
         await handleInteractionError(
             mockInteraction,
@@ -598,7 +727,7 @@ export async function executePrefixCommand(
                     'prefix_command',
 
                 command:
-                    command.data?.name,
+                    commandName,
 
                 source:
                     'messageAdapter.executePrefixCommand',
