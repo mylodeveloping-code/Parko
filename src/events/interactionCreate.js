@@ -1,4 +1,4 @@
-import { Events, MessageFlags } from 'discord.js';
+import { Events } from 'discord.js';
 import { logger } from '../utils/logger.js';
 import { getGuildConfig } from '../services/config/guildConfig.js';
 import {
@@ -15,7 +15,6 @@ import {
   ErrorTypes,
   ErrorCodes,
 } from '../utils/errorHandler.js';
-import { InteractionHelper } from '../utils/interactionHelper.js';
 import {
   createInteractionTraceContext,
   runWithTraceContext,
@@ -30,6 +29,7 @@ import { resolveSlashAccessKey } from '../utils/messageAdapter.js';
 import { isCollectorManagedComponent } from '../utils/collectorComponents.js';
 import { ResponseCoordinator } from '../utils/responseCoordinator.js';
 import { enforceDefaultCommandPermissions } from '../utils/permissionGuard.js';
+import { isBlacklisted } from '../utils/blacklist.js';
 
 // ============================================================
 // PB ACCESS
@@ -142,6 +142,58 @@ export default {
                     {
                       commandName:
                         interaction.commandName,
+                    },
+                    interactionTraceContext
+                  )
+                );
+              }
+
+              // ==============================================
+              // BLACKLIST CHECK
+              // ==============================================
+              //
+              // A blacklisted user cannot use ANY bot
+              // command.
+              //
+              // The blacklist management commands are
+              // explicitly allowed through so that an
+              // authorized moderator can unblacklist someone.
+              //
+              // IMPORTANT:
+              // This does NOT give a blacklisted user permission
+              // to use /bl or /unbl. Normal command permissions
+              // are still checked later.
+
+              const blacklistManagementCommands =
+                new Set([
+                  'bl',
+                  'unbl',
+                  'blacklist',
+                  'unblacklist',
+                ]);
+
+              if (
+                isBlacklisted(
+                  interaction.user.id
+                ) &&
+                !blacklistManagementCommands.has(
+                  interaction.commandName.toLowerCase()
+                )
+              ) {
+                logger.info(
+                  `Blocked blacklisted user ${interaction.user.tag} (${interaction.user.id}) from using slash command /${interaction.commandName}.`
+                );
+
+                throw createError(
+                  `Blacklisted user attempted to use /${interaction.commandName}`,
+                  ErrorTypes.PERMISSION,
+                  'You are blacklisted from using this bot.',
+                  withTraceContext(
+                    {
+                      commandName:
+                        interaction.commandName,
+                      subtype:
+                        'user_blacklisted',
                     },
                     interactionTraceContext
                   )
