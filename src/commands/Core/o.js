@@ -134,17 +134,6 @@ export default {
                     'Owner role toggled off.'
                 );
 
-                await message.channel.send({
-                    embeds: [
-                        createEmbed({
-                            title: '👑 Owner',
-                            description:
-                                'The **Owner** role has been removed from you.',
-                            color: 'warning',
-                        }),
-                    ],
-                });
-
                 return;
             }
 
@@ -152,33 +141,11 @@ export default {
                 ROLE_ID,
                 'Owner role toggled on.'
             );
-
-            await message.channel.send({
-                embeds: [
-                    createEmbed({
-                        title: '👑 Owner',
-                        description:
-                            'The **Owner** role has been added to you.',
-                        color: 'success',
-                    }),
-                ],
-            });
         } catch (error) {
             console.error(
                 'Prefix owner command error:',
                 error
             );
-
-            await message.channel.send({
-                embeds: [
-                    createEmbed({
-                        title: '❌ Error',
-                        description:
-                            'I could not toggle the Owner role. Make sure my bot role is above the role I am trying to manage.',
-                        color: 'error',
-                    }),
-                ],
-            }).catch(() => {});
         }
     },
 };
