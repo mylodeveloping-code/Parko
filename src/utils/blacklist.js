@@ -1,59 +1,81 @@
-import { PermissionFlagsBits } from 'discord.js';
-import {
-    addToBlacklist,
-    removeFromBlacklist,
-    isBlacklisted,
-} from '../../utils/blacklist.js';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-export default {
-    name: 'bl',
-    aliases: ['blacklist'],
-    category: 'moderation',
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-    async execute(message, args) {
-        // Only administrators can use .bl
-        if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
-            return message.reply({
-                content: '❌ You do not have permission to use this command.',
-            });
-        }
+const blacklistFile = path.join(__dirname, '../../data/blacklist.json');
 
-        const userId = args[0];
+const dataDir = path.dirname(blacklistFile);
 
-        // Check for a user ID
-        if (!userId) {
-            return message.reply({
-                content:
-                    '❌ Please provide a Discord user ID.\n\nExample: `.bl 1335665701444386896`',
-            });
-        }
+if (!fs.existsSync(dataDir)) {
+    fs.mkdirSync(dataDir, { recursive: true });
+}
 
-        // Validate Discord snowflake
-        if (!/^\d{17,20}$/.test(userId)) {
-            return message.reply({
-                content: '❌ That is not a valid Discord user ID.',
-            });
-        }
+if (!fs.existsSync(blacklistFile)) {
+    fs.writeFileSync(blacklistFile, '[]', 'utf8');
+}
 
-        // Prevent blacklisting yourself
-        if (userId === message.author.id) {
-            return message.reply({
-                content: '❌ You cannot blacklist yourself.',
-            });
-        }
+function loadBlacklist() {
+    try {
+        const data = fs.readFileSync(blacklistFile, 'utf8');
+        const blacklist = JSON.parse(data);
 
-        // Check if already blacklisted
-        if (isBlacklisted(userId)) {
-            return message.reply({
-                content: `⚠️ <@${userId}> is already blacklisted.`,
-            });
-        }
+        return Array.isArray(blacklist) ? blacklist : [];
+    } catch (error) {
+        console.error('Failed to load blacklist:', error);
+        return [];
+    }
+}
 
-        // Add user to blacklist
-        addToBlacklist(userId);
+function saveBlacklist(blacklist) {
+    try {
+        fs.writeFileSync(
+            blacklistFile,
+            JSON.stringify(blacklist, null, 2),
+            'utf8'
+        );
+    } catch (error) {
+        console.error('Failed to save blacklist:', error);
+    }
+}
 
-        return message.reply({
-            content: `✅ <@${userId}> has been blacklisted and can no longer use ${message.client.user.username}.`,
-        });
-    },
-};
+export function isBlacklisted(userId) {
+    return loadBlacklist().includes(String(userId));
+}
+
+export function addToBlacklist(userId) {
+    userId = String(userId);
+
+    const blacklist = loadBlacklist();
+
+    if (blacklist.includes(userId)) {
+        return false;
+    }
+
+    blacklist.push(userId);
+    saveBlacklist(blacklist);
+
+    return true;
+}
+
+export function removeFromBlacklist(userId) {
+    userId = String(userId);
+
+    const blacklist = loadBlacklist();
+    const index = blacklist.indexOf(userId);
+
+    if (index === -1) {
+        return false;
+    }
+
+    blacklist.splice(index, 1);
+    saveBlacklist(blacklist);
+
+    return true;
+}
+
+export function getBlacklist() {
+    return loadBlacklist();
+}
