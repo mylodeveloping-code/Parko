@@ -18,14 +18,12 @@ function getSubcommandInfo(commandData) {
         for (const option of commandData.options) {
             if (option.type === 1) {
                 subcommands.push(option.name);
-            } else if (option.type === 2) {
-                if (option.options) {
-                    for (const subOption of option.options) {
-                        if (subOption.type === 1) {
-                            subcommands.push(
-                                `${option.name}/${subOption.name}`,
-                            );
-                        }
+            } else if (option.type === 2 && option.options) {
+                for (const subOption of option.options) {
+                    if (subOption.type === 1) {
+                        subcommands.push(
+                            `${option.name}/${subOption.name}`,
+                        );
                     }
                 }
             }
@@ -78,19 +76,9 @@ export async function loadCommands(client) {
             const normalizedPath =
                 filePath.replace(/\\/g, '/');
 
-            const commandName =
-                path.basename(filePath, '.js');
-
-            const commandDir =
-                path.dirname(filePath);
-
-            const category =
-                path.basename(commandDir);
-
-            const commandModule =
-                await import(
-                    `file://${filePath}`
-                );
+            const commandModule = await import(
+                pathToFileURL(filePath).href
+            );
 
             const command =
                 commandModule.default ||
@@ -104,11 +92,30 @@ export async function loadCommands(client) {
                 continue;
             }
 
-            command.category = category;
-            command.filePath = normalizedPath;
+            const commandData =
+                typeof command.data.toJSON === 'function'
+                    ? command.data.toJSON()
+                    : command.data;
 
             const primaryCommandName =
-                command.data.name;
+                commandData.name;
+
+            if (!primaryCommandName) {
+                logger.warn(
+                    `Command at ${filePath} does not have a valid command name.`,
+                );
+
+                continue;
+            }
+
+            const commandDir =
+                path.dirname(filePath);
+
+            const category =
+                path.basename(commandDir);
+
+            command.category = category;
+            command.filePath = normalizedPath;
 
             if (
                 !uniqueCommandNames.has(
@@ -123,55 +130,45 @@ export async function loadCommands(client) {
                     primaryCommandName,
                     command,
                 );
-            }
-
-            const subcommands =
-                getSubcommandInfo(
-                    command.data.toJSON(),
+            } else {
+                logger.warn(
+                    `Duplicate command detected: ${primaryCommandName} at ${filePath}`,
                 );
 
+                continue;
+            }
+
             logger.info(
-                `Loaded command: ${primaryCommandName} from ${normalizedPath} (category: ${category})`,
+                `✅ Loaded command: ${primaryCommandName} from ${normalizedPath} (category: ${category})`,
             );
+
+            const subcommands =
+                getSubcommandInfo(commandData);
 
             if (subcommands.length > 0) {
                 logger.info(
-                    `  - Subcommands: ${subcommands.join(', ')}`,
+                    `   └─ Subcommands: ${subcommands.join(', ')}`,
                 );
             }
         } catch (error) {
             logger.error(
-                `Error loading command from ${filePath}:`,
+                `❌ Error loading command from ${filePath}:`,
                 error,
             );
         }
     }
 
-    const uniqueCommands = new Set();
-
-    for (const [name, command] of client.commands) {
-        if (
-            command.data &&
-            command.data.name
-        ) {
-            uniqueCommands.add(
-                command.data.name,
-            );
-        }
-    }
-
     logger.info(
-        `Loaded ${uniqueCommands.size} commands`,
+        `Loaded ${client.commands.size} commands`,
     );
 
-    // Explicit diagnostic for /role
     if (client.commands.has('role')) {
         logger.info(
-            '✅ /role command successfully loaded',
+            '✅ /role command was successfully loaded.',
         );
     } else {
         logger.error(
-            '❌ /role command was NOT found in the commands folder',
+            '❌ /role command was NOT found after loading commands.',
         );
     }
 
@@ -189,33 +186,37 @@ function collectCommandPayloads(client) {
             typeof command.data.toJSON !== 'function'
         ) {
             logger.warn(
-                `Command missing data or toJSON method: ${command}`,
+                `Command is missing data or toJSON method.`,
             );
 
             continue;
         }
 
+        const commandJson =
+            command.data.toJSON();
+
         const commandName =
-            command.data.name;
+            commandJson.name;
+
+        if (!commandName) {
+            logger.warn(
+                'Skipping command without a name.',
+            );
+
+            continue;
+        }
 
         if (
-            registeredNames.has(
-                commandName,
-            )
+            registeredNames.has(commandName)
         ) {
-            logger.debug(
+            logger.warn(
                 `Skipping duplicate command: ${commandName}`,
             );
 
             continue;
         }
 
-        registeredNames.add(
-            commandName,
-        );
-
-        const commandJson =
-            command.data.toJSON();
+        registeredNames.add(commandName);
 
         commands.push(commandJson);
 
@@ -223,6 +224,10 @@ function collectCommandPayloads(client) {
             getSubcommandInfo(
                 commandJson,
             ).length;
+
+        logger.info(
+            `Preparing command for registration: ${commandName}`,
+        );
     }
 
     return {
@@ -240,7 +245,7 @@ function validateCommands(commands) {
             cmd.name.length > 32
         ) {
             validationErrors.push(
-                `Command ${cmd.name} has name longer than 32 chars`,
+                `Command ${cmd.name} has a name longer than 32 characters.`,
             );
         }
 
@@ -249,7 +254,7 @@ function validateCommands(commands) {
             cmd.description.length > 110
         ) {
             validationErrors.push(
-                `Command ${cmd.name} has description longer than 110 chars`,
+                `Command ${cmd.name} has a description longer than 110 characters.`,
             );
         }
 
@@ -263,7 +268,7 @@ function validateCommands(commands) {
                 option.name.length > 32
             ) {
                 validationErrors.push(
-                    `Command ${cmd.name} option ${option.name} has name longer than 32 chars`,
+                    `Command ${cmd.name} option ${option.name} has a name longer than 32 characters.`,
                 );
             }
 
@@ -272,7 +277,7 @@ function validateCommands(commands) {
                 option.description.length > 110
             ) {
                 validationErrors.push(
-                    `Command ${cmd.name} option ${option.name} has description longer than 110 chars`,
+                    `Command ${cmd.name} option ${option.name} has a description longer than 110 characters.`,
                 );
             }
         }
@@ -283,15 +288,12 @@ function validateCommands(commands) {
             'Command validation failed:',
         );
 
-        validationErrors.forEach(
-            (error) =>
-                logger.error(
-                    `  - ${error}`,
-                ),
-        );
+        for (const error of validationErrors) {
+            logger.error(`  - ${error}`);
+        }
 
         throw new Error(
-            `Command validation failed with ${validationErrors.length} errors`,
+            `Command validation failed with ${validationErrors.length} errors.`,
         );
     }
 }
@@ -302,7 +304,7 @@ function prepareCommandsForRegistration(commands) {
         COMMAND_COUNT_WARN_THRESHOLD
     ) {
         logger.warn(
-            `Command count (${commands.length}) is near Discord's ${MAX_COMMANDS} command limit`,
+            `Command count (${commands.length}) is near Discord's ${MAX_COMMANDS} command limit.`,
         );
     }
 
@@ -312,6 +314,10 @@ function prepareCommandsForRegistration(commands) {
     ) {
         return commands;
     }
+
+    logger.warn(
+        `Command count (${commands.length}) exceeds Discord's ${MAX_COMMANDS} command limit. Truncating.`,
+    );
 
     return commands.slice(
         0,
@@ -327,24 +333,24 @@ async function registerGuildCommands(
 ) {
     if (!clientId) {
         throw new Error(
-            'CLIENT_ID is required for slash command registration',
+            'CLIENT_ID is required for slash command registration.',
         );
     }
 
     if (!guildId) {
         throw new Error(
-            'GUILD_ID is required for guild slash command registration',
+            'GUILD_ID is required for guild command registration.',
         );
     }
 
     if (!client.rest) {
         throw new Error(
-            'Discord REST client is not available',
+            'Discord REST client is not available.',
         );
     }
 
     logger.info(
-        `Registering ${commands.length} slash commands to guild ${guildId}...`,
+        `Registering ${commands.length} commands to guild ${guildId}...`,
     );
 
     await client.rest.put(
@@ -355,17 +361,22 @@ async function registerGuildCommands(
     );
 
     logger.info(
-        `✅ Successfully registered ${commands.length} slash commands to guild ${guildId}`,
+        `✅ Successfully registered ${commands.length} commands to guild ${guildId}.`,
     );
 
-    if (
-        commands.some(
+    const roleCommand =
+        commands.find(
             (command) =>
                 command.name === 'role',
-        )
-    ) {
+        );
+
+    if (roleCommand) {
         logger.info(
-            '✅ /role was included in guild command registration',
+            '✅ /role is included in the registered guild commands.',
+        );
+    } else {
+        logger.error(
+            '❌ /role is NOT included in the registered guild commands.',
         );
     }
 }
@@ -377,18 +388,18 @@ async function registerGlobalCommands(
 ) {
     if (!clientId) {
         throw new Error(
-            'CLIENT_ID is required for slash command registration',
+            'CLIENT_ID is required for slash command registration.',
         );
     }
 
     if (!client.rest) {
         throw new Error(
-            'Discord REST client is not available',
+            'Discord REST client is not available.',
         );
     }
 
     logger.info(
-        `Registering ${commands.length} global slash commands...`,
+        `Registering ${commands.length} global commands...`,
     );
 
     await client.rest.put(
@@ -399,26 +410,48 @@ async function registerGlobalCommands(
     );
 
     logger.info(
-        `✅ Successfully registered ${commands.length} global slash commands`,
+        `✅ Successfully registered ${commands.length} global commands.`,
     );
+
+    const roleCommand =
+        commands.find(
+            (command) =>
+                command.name === 'role',
+        );
+
+    if (roleCommand) {
+        logger.info(
+            '✅ /role is included in the registered global commands.',
+        );
+    } else {
+        logger.error(
+            '❌ /role is NOT included in the registered global commands.',
+        );
+    }
 }
 
 export async function registerCommands(
     client,
     options = {},
 ) {
-    const {
-        clientId = null,
-        guildId =
-            botConfig.bot?.guildId ||
-            process.env.GUILD_ID,
-    } = options;
+    const clientId =
+        options.clientId ||
+        botConfig.bot?.clientId ||
+        process.env.CLIENT_ID;
+
+    const guildId =
+        options.guildId ||
+        botConfig.bot?.guildId ||
+        process.env.GUILD_ID;
 
     try {
         const {
             commands,
-        } = collectCommandPayloads(
-            client,
+            totalSubcommands,
+        } = collectCommandPayloads(client);
+
+        logger.info(
+            `Collected ${commands.length} commands and ${totalSubcommands} subcommands for registration.`,
         );
 
         validateCommands(
@@ -431,6 +464,10 @@ export async function registerCommands(
             );
 
         if (guildId) {
+            logger.info(
+                `Using GUILD_ID ${guildId} for command registration.`,
+            );
+
             await registerGuildCommands(
                 client,
                 clientId,
@@ -439,7 +476,7 @@ export async function registerCommands(
             );
         } else {
             logger.warn(
-                '⚠️ GUILD_ID not configured. Falling back to global command registration.',
+                '⚠️ GUILD_ID is not configured. Registering commands globally instead.',
             );
 
             await registerGlobalCommands(
@@ -450,7 +487,7 @@ export async function registerCommands(
         }
     } catch (error) {
         logger.error(
-            'Error registering commands:',
+            '❌ Error registering commands:',
             error,
         );
 
@@ -490,12 +527,14 @@ export async function reloadCommand(
             Date.now().toString(),
         );
 
+        const newCommandModule =
+            await import(
+                moduleUrl.href
+            );
+
         const newCommand =
-            (
-                await import(
-                    moduleUrl.href
-                )
-            ).default;
+            newCommandModule.default ||
+            newCommandModule;
 
         client.commands.set(
             commandName,
