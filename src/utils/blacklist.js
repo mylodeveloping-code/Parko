@@ -1,58 +1,111 @@
-import {
-    SlashCommandBuilder,
-    PermissionFlagsBits,
-} from 'discord.js';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-import {
-    addToBlacklist,
-    isBlacklisted,
-} from '../../utils/blacklist.js';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-export default {
-    data: new SlashCommandBuilder()
-        .setName('bl')
-        .setDescription('Blacklist a user from using the bot')
-        .addStringOption((option) =>
-            option
-                .setName('user_id')
-                .setDescription('The Discord user ID to blacklist')
-                .setRequired(true)
-        )
-        .setDefaultMemberPermissions(
-            PermissionFlagsBits.Administrator
-        ),
+const blacklistFile = path.join(
+    __dirname,
+    '../data/blacklist.json'
+);
 
-    category: 'moderation',
+const dataDir = path.dirname(blacklistFile);
 
-    async execute(interaction, config, client) {
-        const userId =
-            interaction.options.getString('user_id');
+// Make sure the data directory exists.
+if (!fs.existsSync(dataDir)) {
+    fs.mkdirSync(dataDir, { recursive: true });
+}
 
-        if (!userId) {
-            await interaction.reply(
-                'Usage: `.bl <user ID>`'
-            );
-            return;
-        }
+// Make sure the blacklist file exists.
+if (!fs.existsSync(blacklistFile)) {
+    fs.writeFileSync(
+        blacklistFile,
+        JSON.stringify([], null, 2)
+    );
+}
 
-        if (!/^\d{17,20}$/.test(userId)) {
-            await interaction.reply(
-                'Please provide a valid Discord user ID.'
-            );
-            return;
-        }
-
-        if (isBlacklisted(userId)) {
-            await interaction.reply(
-                `<@${userId}> is already blacklisted.`
-            );
-            return;
-        }
-
-        addToBlacklist(userId);
-
-        await interaction.reply(
-            `<@${userId}> has been added to the blacklist.`
+function loadBlacklist() {
+    try {
+        const data = fs.readFileSync(
+            blacklistFile,
+            'utf8'
         );
-    },
-};
+
+        const parsed = JSON.parse(data);
+
+        if (!Array.isArray(parsed)) {
+            return [];
+        }
+
+        return parsed.map(String);
+    } catch {
+        return [];
+    }
+}
+
+function saveBlacklist(blacklist) {
+    fs.writeFileSync(
+        blacklistFile,
+        JSON.stringify(blacklist, null, 2)
+    );
+}
+
+export function isBlacklisted(userId) {
+    if (!userId) {
+        return false;
+    }
+
+    const blacklist = loadBlacklist();
+
+    return blacklist.includes(
+        String(userId)
+    );
+}
+
+export function addToBlacklist(userId) {
+    if (!userId) {
+        return false;
+    }
+
+    userId = String(userId);
+
+    const blacklist = loadBlacklist();
+
+    if (blacklist.includes(userId)) {
+        return false;
+    }
+
+    blacklist.push(userId);
+
+    saveBlacklist(blacklist);
+
+    return true;
+}
+
+export function removeFromBlacklist(userId) {
+    if (!userId) {
+        return false;
+    }
+
+    userId = String(userId);
+
+    const blacklist = loadBlacklist();
+
+    const index =
+        blacklist.indexOf(userId);
+
+    if (index === -1) {
+        return false;
+    }
+
+    blacklist.splice(index, 1);
+
+    saveBlacklist(blacklist);
+
+    return true;
+}
+
+export function getBlacklist() {
+    return loadBlacklist();
+}

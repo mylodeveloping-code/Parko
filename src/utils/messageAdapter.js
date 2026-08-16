@@ -11,6 +11,7 @@ import {
     buildPrefixUsage,
 } from './responseCoordinator.js';
 import { enforceDefaultCommandPermissions } from './permissionGuard.js';
+import { isBlacklisted } from './blacklist.js';
 
 export { buildPrefixUsage };
 
@@ -86,7 +87,6 @@ function resolveUserId(value) {
     const stringValue =
         String(value).trim();
 
-    // <@123456789>
     let match =
         stringValue.match(/^<@(\d+)>$/);
 
@@ -94,7 +94,6 @@ function resolveUserId(value) {
         return match[1];
     }
 
-    // <@!123456789>
     match =
         stringValue.match(/^<@!(\d+)>$/);
 
@@ -102,7 +101,6 @@ function resolveUserId(value) {
         return match[1];
     }
 
-    // Plain Discord ID
     if (/^\d+$/.test(stringValue)) {
         return stringValue;
     }
@@ -159,25 +157,13 @@ export function createMockInteraction(
             message.id,
 
         options: {
-            // ------------------------------------------------
-            // Generic get
-            // ------------------------------------------------
-
             get: (name) => {
                 return options.get(name);
             },
 
-            // ------------------------------------------------
-            // String
-            // ------------------------------------------------
-
             getString: (name) => {
                 return options.getString(name);
             },
-
-            // ------------------------------------------------
-            // USER
-            // ------------------------------------------------
 
             getUser: (name) => {
                 const rawValue =
@@ -194,7 +180,6 @@ export function createMockInteraction(
                     return null;
                 }
 
-                // First try the member cache.
                 const cachedMember =
                     message.guild?.members?.cache?.get(
                         userId
@@ -204,7 +189,6 @@ export function createMockInteraction(
                     return cachedMember.user;
                 }
 
-                // Then try the user cache.
                 const cachedUser =
                     message.client?.users?.cache?.get(
                         userId
@@ -214,12 +198,6 @@ export function createMockInteraction(
                     return cachedUser;
                 }
 
-                /*
-                 * Return a minimal User-like object.
-                 *
-                 * This is enough for commands that primarily
-                 * need the user's ID and tag.
-                 */
                 return {
                     id: userId,
 
@@ -237,10 +215,6 @@ export function createMockInteraction(
                 };
             },
 
-            // ------------------------------------------------
-            // MEMBER
-            // ------------------------------------------------
-
             getMember: (name) => {
                 const rawValue =
                     options.getUser(name);
@@ -256,9 +230,6 @@ export function createMockInteraction(
                     return null;
                 }
 
-                /*
-                 * Return the cached member if available.
-                 */
                 const cachedMember =
                     message.guild?.members?.cache?.get(
                         userId
@@ -268,27 +239,8 @@ export function createMockInteraction(
                     return cachedMember;
                 }
 
-                /*
-                 * IMPORTANT:
-                 *
-                 * Prefix commands cannot make getMember()
-                 * itself async because Discord's real
-                 * CommandInteraction API expects getMember()
-                 * to be synchronous.
-                 *
-                 * The untimeout command already has a fallback:
-                 *
-                 * guild.members.fetch(targetUser.id)
-                 *
-                 * so returning null here allows that fallback
-                 * to run correctly.
-                 */
                 return null;
             },
-
-            // ------------------------------------------------
-            // CHANNEL
-            // ------------------------------------------------
 
             getChannel: (name) => {
                 const rawValue =
@@ -313,10 +265,6 @@ export function createMockInteraction(
                     .catch(() => null);
             },
 
-            // ------------------------------------------------
-            // ROLE
-            // ------------------------------------------------
-
             getRole: (name) => {
                 const rawValue =
                     options.getString(name);
@@ -340,25 +288,13 @@ export function createMockInteraction(
                     .catch(() => null);
             },
 
-            // ------------------------------------------------
-            // INTEGER
-            // ------------------------------------------------
-
             getInteger: (name) => {
                 return options.getInteger(name);
             },
 
-            // ------------------------------------------------
-            // BOOLEAN
-            // ------------------------------------------------
-
             getBoolean: (name) => {
                 return options.getBoolean(name);
             },
-
-            // ------------------------------------------------
-            // SUBCOMMAND
-            // ------------------------------------------------
 
             getSubcommand: () => {
                 return options.getSubcommand();
@@ -368,17 +304,9 @@ export function createMockInteraction(
                 return options.getSubcommandGroup();
             },
 
-            // ------------------------------------------------
-            // REQUIRED VALIDATION
-            // ------------------------------------------------
-
             validateRequired: () => {
                 return options.validateRequired();
             },
-
-            // ------------------------------------------------
-            // HOISTED OPTIONS
-            // ------------------------------------------------
 
             _hoistedOptions:
                 args.map(
@@ -422,10 +350,6 @@ export function createMockInteraction(
         _replyMessage:
             null,
 
-        // ----------------------------------------------------
-        // REPLY HANDLING
-        // ----------------------------------------------------
-
         deleteReply:
             async () => {
                 const replyMessage =
@@ -461,10 +385,6 @@ export function createMockInteraction(
             null,
     };
 
-    // ========================================================
-    // RESPONSE COORDINATOR
-    // ========================================================
-
     const coordinator =
         ResponseCoordinator.attach(
             mockInteraction,
@@ -492,7 +412,6 @@ export function createMockInteraction(
         () =>
             coordinator.deferLocal();
 
-    // Patch Discord interaction helpers.
     InteractionHelper.patchInteractionResponses(
         mockInteraction
     );
@@ -543,6 +462,22 @@ export async function executePrefixCommand(
     prefixOverride = null,
     guildConfig = null
 ) {
+    // ========================================================
+    // BLACKLIST CHECK
+    // ========================================================
+
+    if (
+        isBlacklisted(
+            message.author.id
+        )
+    ) {
+        logger.info(
+            `Blocked blacklisted user ${message.author.tag} (${message.author.id}) from using prefix command.`
+        );
+
+        return;
+    }
+
     const mockInteraction =
         createMockInteraction(
             message,
