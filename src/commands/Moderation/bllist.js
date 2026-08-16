@@ -1,120 +1,97 @@
-import { createEmbed } from '../../utils/embeds.js';
+import { SlashCommandBuilder, PermissionFlagsBits } from 'discord.js';
+import { successEmbed } from '../../utils/embeds.js';
+import { InteractionHelper } from '../../utils/interactionHelper.js';
 import { getBlacklistedUsers } from '../../utils/blacklist.js';
 
 const BLACKLIST_OWNER_ID = '1171948174190067737';
 
 export default {
-    name: 'blist',
-    aliases: ['blacklist', 'blacklisted'],
-    description: 'View all currently blacklisted users.',
+    data: new SlashCommandBuilder()
+        .setName('bllist')
+        .setDescription('View all users currently blacklisted from the bot')
+        .setDefaultMemberPermissions(
+            PermissionFlagsBits.ManageGuild
+        ),
+
     category: 'moderation',
 
-    async execute(message, args, client) {
-        // Only the bot owner can view the blacklist.
-        if (message.author.id !== BLACKLIST_OWNER_ID) {
-            await message.channel.send({
-                embeds: [
-                    createEmbed({
-                        title: '⛔ Permission Denied',
-                        description:
-                            'Only the bot owner can view the blacklist.',
-                        color: 'error',
-                    }),
-                ],
-            }).catch(() => {});
+    supportsPrefix: true,
+
+    async execute(interaction, config, client) {
+        if (interaction.user.id !== BLACKLIST_OWNER_ID) {
+            await InteractionHelper.universalReply(
+                interaction,
+                {
+                    embeds: [
+                        {
+                            title: '⛔ Permission Denied',
+                            description:
+                                'You do not have permission to view the bot blacklist.',
+                            color: 0xff0000,
+                        },
+                    ],
+                    ephemeral: true,
+                }
+            );
 
             return;
         }
 
-        try {
-            const blacklistedUsers =
-                getBlacklistedUsers();
+        const users = getBlacklistedUsers();
 
-            if (
-                !Array.isArray(blacklistedUsers) ||
-                blacklistedUsers.length === 0
-            ) {
-                await message.channel.send({
+        if (!users || users.length === 0) {
+            await InteractionHelper.universalReply(
+                interaction,
+                {
                     embeds: [
-                        createEmbed({
-                            title: '📋 Blacklist',
-                            description:
-                                'There are currently **no blacklisted users**.',
-                            color: 'info',
-                        }),
+                        successEmbed(
+                            '📋 Blacklist',
+                            'There are currently **no blacklisted users**.'
+                        ),
                     ],
-                }).catch(() => {});
-
-                return;
-            }
-
-            const userLines = [];
-
-            for (const userId of blacklistedUsers) {
-                let displayName =
-                    'Unknown User';
-
-                try {
-                    const user =
-                        await client.users.fetch(
-                            userId
-                        );
-
-                    displayName =
-                        user.tag ||
-                        user.username ||
-                        'Unknown User';
-                } catch {
-                    // The user may no longer be fetchable.
                 }
-
-                userLines.push(
-                    `🚫 **${displayName}** — \`${userId}\``
-                );
-            }
-
-            /*
-             * Discord embed descriptions have a 4096-character limit.
-             * Keep the list within that limit.
-             */
-            let description =
-                userLines.join('\n');
-
-            if (description.length > 4000) {
-                description =
-                    description.substring(
-                        0,
-                        3990
-                    ) +
-                    '\n\n…and more.';
-            }
-
-            await message.channel.send({
-                embeds: [
-                    createEmbed({
-                        title:
-                            `📋 Blacklisted Users (${blacklistedUsers.length})`,
-                        description,
-                        color: 'error',
-                    }),
-                ],
-            }).catch(() => {});
-        } catch (error) {
-            console.error(
-                'Error displaying blacklist:',
-                error
             );
 
-            await message.channel.send({
-                embeds: [
-                    createEmbed({
-                        title: '❌ Error',
-                        description:
-                            'I could not retrieve the blacklist right now.',
-                        color: 'error',
-                    }),
-                ],
-            }).catch(() => {});
+            return;
         }
+
+        const lines = [];
+
+        for (let i = 0; i < users.length; i++) {
+            const userId = users[i];
+
+            let displayName = 'Unknown User';
+
+            try {
+                const user = await client.users.fetch(userId);
+
+                displayName =
+                    user.tag ||
+                    user.username ||
+                    'Unknown User';
+            } catch {
+                // User may no longer be fetchable.
+            }
+
+            lines.push(
+                `**${i + 1}.** ${displayName} — \`${userId}\``
+            );
+        }
+
+        const description =
+            `There are currently **${users.length}** blacklisted user${users.length === 1 ? '' : 's'}.\n\n` +
+            lines.join('\n');
+
+        await InteractionHelper.universalReply(
+            interaction,
+            {
+                embeds: [
+                    successEmbed(
+                        '📋 Blacklisted Users',
+                        description
+                    ),
+                ],
+            }
+        );
     },
 };
