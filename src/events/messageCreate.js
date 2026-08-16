@@ -1141,7 +1141,7 @@ function scheduleAutomaticUnban(
                 guildId,
                 userId,
                 remainingMs -
-                    MAX_TIMEOUT,
+                MAX_TIMEOUT,
                 client
             );
 
@@ -1243,19 +1243,17 @@ async function handlePrefixCommand(
         // ====================================================
         // BLACKLIST CHECK
         // ====================================================
-
-        /*
-         * IMPORTANT:
-         *
-         * The blacklist is checked immediately after the
-         * prefix command is parsed.
-         *
-         * A blacklisted user cannot execute normal prefix
-         * commands.
-         *
-         * .bl and .unbl are allowed through so administrators
-         * can manage the blacklist.
-         */
+        //
+        // A blacklisted user cannot execute ANY normal
+        // prefix command.
+        //
+        // .bl and .unbl are intentionally allowed through
+        // so authorized staff can manage the blacklist.
+        //
+        // IMPORTANT:
+        // Being blacklisted does NOT grant permission to
+        // use .bl or .unbl. Their normal command permission
+        // checks still apply below.
 
         const rawCommandName =
             String(
@@ -1268,10 +1266,14 @@ async function handlePrefixCommand(
             new Set([
                 'bl',
                 'unbl',
+                'blacklist',
+                'unblacklist',
             ]);
 
         if (
-            isBlacklisted(message.author.id) &&
+            isBlacklisted(
+                message.author.id
+            ) &&
             !blacklistManagementCommands.has(
                 rawCommandName
             )
