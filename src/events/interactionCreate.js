@@ -76,6 +76,10 @@ const COMMAND_ERROR_SUBTYPES = {
     youtube: 'youtube_failed',
 };
 
+// ============================================================
+// TRACE CONTEXT
+// ============================================================
+
 function withTraceContext(context = {}, traceContext = {}) {
     return {
         traceId: traceContext.traceId,
@@ -157,6 +161,61 @@ async function respondToBlacklistedUser(interaction) {
 }
 
 // ============================================================
+// IMMEDIATE MUSIC ACK
+// ============================================================
+
+async function immediatelyAcknowledgeMusicInteraction(
+    interaction,
+) {
+    if (
+        !interaction?.isChatInputCommand?.() ||
+        String(
+            interaction.commandName || '',
+        ).toLowerCase() !== 'play'
+    ) {
+        return true;
+    }
+
+    if (
+        interaction.replied ||
+        interaction.deferred
+    ) {
+        return true;
+    }
+
+    const startedAt = Date.now();
+
+    try {
+        logger.info(
+            `🎵 /play received. Sending immediate Discord acknowledgement for interaction ${interaction.id}.`
+        );
+
+        await interaction.deferReply({
+            flags: MessageFlags.Ephemeral,
+        });
+
+        const elapsed =
+            Date.now() - startedAt;
+
+        logger.info(
+            `🎵 /play interaction ${interaction.id} acknowledged successfully in ${elapsed}ms.`
+        );
+
+        return true;
+    } catch (error) {
+        const elapsed =
+            Date.now() - startedAt;
+
+        logger.error(
+            `❌ Failed to acknowledge /play interaction ${interaction.id} after ${elapsed}ms:`,
+            error,
+        );
+
+        return false;
+    }
+}
+
+// ============================================================
 // INTERACTION CREATE
 // ============================================================
 
@@ -207,6 +266,43 @@ export default {
 
                 return;
             }
+        }
+
+        // ========================================================
+        // IMMEDIATELY ACKNOWLEDGE /PLAY
+        // ========================================================
+        //
+        // This MUST happen before:
+        //
+        // - InteractionHelper.patchInteractionResponses()
+        // - ResponseCoordinator.attach()
+        // - command lookup
+        // - command validation
+        // - cooldown checks
+        // - abuse protection
+        // - guild config
+        // - permission checks
+        //
+        // This gives Discord the acknowledgement as early as
+        // possible after InteractionCreate fires.
+        //
+        const musicAcknowledged =
+            await immediatelyAcknowledgeMusicInteraction(
+                interaction,
+            );
+
+        if (
+            interaction.isChatInputCommand() &&
+            String(
+                interaction.commandName || '',
+            ).toLowerCase() === 'play' &&
+            !musicAcknowledged
+        ) {
+            logger.error(
+                `❌ /play interaction ${interaction.id} could not be acknowledged. Stopping execution.`,
+            );
+
+            return;
         }
 
         // ========================================================
@@ -280,35 +376,6 @@ export default {
                         logger.info(
                             `📥 Received slash command /${commandName} from ${interaction.user?.tag || interaction.user?.id}.`
                         );
-
-                        // ==================================================
-                        // IMMEDIATE MUSIC ACKNOWLEDGEMENT
-                        // ==================================================
-                        //
-                        // /play performs several asynchronous operations
-                        // later in this handler. Discord only gives us
-                        // about 3 seconds to acknowledge an interaction.
-                        //
-                        // Defer /play BEFORE guild config, cooldown,
-                        // abuse protection, permission checks, etc.
-                        //
-                        if (
-                            commandName === 'play' &&
-                            !interaction.deferred &&
-                            !interaction.replied
-                        ) {
-                            logger.info(
-                                `🎵 Immediately deferring /play interaction ${interaction.id}.`
-                            );
-
-                            await interaction.deferReply({
-                                flags: MessageFlags.Ephemeral,
-                            });
-
-                            logger.info(
-                                `🎵 Successfully deferred /play interaction ${interaction.id}.`
-                            );
-                        }
 
                         // ==================================================
                         // FIND COMMAND
@@ -1002,11 +1069,6 @@ export default {
 
 function isMaintenanceModeSafe() {
     try {
-        // botConfig already exposes the normal maintenance
-        // configuration through the existing config helpers.
-        //
-        // This wrapper prevents a configuration problem from
-        // silently killing every interaction.
         const config =
             botConfig?.maintenanceMode;
 
