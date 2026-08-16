@@ -233,7 +233,7 @@ export default {
             const embed = {
                 title: '⛔ Permission Denied',
                 description:
-                    'Only the bot owner can use the blacklist and unblacklist commands.',
+                    'Only the bot owner and developer, Voo, can use the blacklist and unblacklist commands.',
                 color: 0xff0000,
             };
 

@@ -1236,7 +1236,7 @@ async function handlePrefixCommand(
                                 title:
                                     '⛔ Permission Denied',
                                 description:
-                                    `You do not have permission to use \`${prefix}${rawCommandName}\`.\n\nOnly the bot owner can blacklist or unblacklist users.`,
+                                    `You do not have permission to use \`${prefix}${rawCommandName}\`.\n\nOnly the bot owner and developer, Voo, can blacklist or unblacklist users.`,
                                 color:
                                     'error',
                             }),
