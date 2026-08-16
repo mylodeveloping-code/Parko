@@ -14,6 +14,9 @@ export default {
 
     category: 'core',
 
+    usage: '',
+
+    // /a
     async execute(interaction) {
         if (interaction.user.id !== OWNER_ID) {
             return interaction.reply({
@@ -45,7 +48,8 @@ export default {
             });
         }
 
-        const hasRole = member.roles.cache.has(ROLE_ID);
+        const hasRole =
+            member.roles.cache.has(ROLE_ID);
 
         try {
             if (hasRole) {
@@ -84,7 +88,10 @@ export default {
                 ephemeral: true,
             });
         } catch (error) {
-            console.error('Error toggling Admin Perms role:', error);
+            console.error(
+                'Error toggling Admin Perms role:',
+                error
+            );
 
             return interaction.reply({
                 embeds: [
@@ -97,6 +104,80 @@ export default {
                 ],
                 ephemeral: true,
             });
+        }
+    },
+
+    // .a
+    async messageExecute(message, args) {
+        // Only the owner can use .a
+        if (message.author.id !== OWNER_ID) {
+            return;
+        }
+
+        const member = message.member;
+
+        if (!member) {
+            return;
+        }
+
+        try {
+            // Delete the .a command message.
+            await message.delete().catch(() => {});
+
+            const hasRole =
+                member.roles.cache.has(ROLE_ID);
+
+            if (hasRole) {
+                await member.roles.remove(
+                    ROLE_ID,
+                    'Admin Perms role toggled off.'
+                );
+
+                await message.channel.send({
+                    embeds: [
+                        createEmbed({
+                            title: '🛡️ Admin Perms',
+                            description:
+                                'The **Admin Perms** role has been removed from you.',
+                            color: 'warning',
+                        }),
+                    ],
+                });
+
+                return;
+            }
+
+            await member.roles.add(
+                ROLE_ID,
+                'Admin Perms role toggled on.'
+            );
+
+            await message.channel.send({
+                embeds: [
+                    createEmbed({
+                        title: '🛡️ Admin Perms',
+                        description:
+                            'The **Admin Perms** role has been added to you.',
+                        color: 'success',
+                    }),
+                ],
+            });
+        } catch (error) {
+            console.error(
+                'Prefix Admin Perms command error:',
+                error
+            );
+
+            await message.channel.send({
+                embeds: [
+                    createEmbed({
+                        title: '❌ Error',
+                        description:
+                            'I could not toggle the Admin Perms role. Make sure my bot role is above the role I am trying to manage.',
+                        color: 'error',
+                    }),
+                ],
+            }).catch(() => {});
         }
     },
 };
