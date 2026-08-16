@@ -14,6 +14,9 @@ import {
   ErrorTypes,
 } from '../../utils/errorHandler.js';
 
+const FOURTEEN_DAYS_MS =
+  14 * 24 * 60 * 60 * 1000;
+
 export default {
   data: new SlashCommandBuilder()
     .setName('purge')
@@ -81,7 +84,7 @@ export default {
     }
 
     try {
-      let deletedCount = 0;
+      let messagesToDelete = [];
 
       // ========================================================
       // NO TARGET
@@ -89,10 +92,7 @@ export default {
 
       if (!target) {
         /*
-         * No target was specified.
-         *
-         * Simply delete the newest requested amount
-         * of messages.
+         * Fetch the newest requested amount of messages.
          */
 
         const fetched =
@@ -100,47 +100,43 @@ export default {
             limit: amount,
           });
 
-        const deleted =
-          await channel.bulkDelete(
-            fetched,
-            true
+        messagesToDelete =
+          [...fetched.values()].slice(
+            0,
+            amount
           );
-
-        deletedCount =
-          deleted.size;
       }
 
       // ========================================================
-      // TARGET SPECIFIED
+      // TARGET
       // ========================================================
 
       else {
         /*
-         * Target was specified.
+         * Search backwards through the channel until we
+         * find the requested number of messages sent by
+         * the target user.
          *
-         * Discord only lets us fetch up to 100 messages
-         * at a time, so we search backwards through the
-         * channel until we have found the requested amount.
+         * Unlike the previous version, OLD messages are
+         * NOT skipped.
          */
 
-        const messagesToDelete =
+        messagesToDelete =
           await findMessagesByUser({
             channel,
             userId: target.id,
             amount,
           });
-
-        if (messagesToDelete.length > 0) {
-          const deleted =
-            await channel.bulkDelete(
-              messagesToDelete,
-              true
-            );
-
-          deletedCount =
-            deleted.size;
-        }
       }
+
+      // ========================================================
+      // DELETE
+      // ========================================================
+
+      const deletedCount =
+        await deleteMessagesIndividuallyOrBulk(
+          messagesToDelete
+        );
 
       // ========================================================
       // LOG
@@ -153,7 +149,7 @@ export default {
           action: 'Messages Purged',
 
           target: target
-            ? `${target.tag || target.username} (${target.id})`
+            ? `${target.tag || target.username} (${target.id}) — ${channel} (${deletedCount} messages)`
             : `${channel} (${deletedCount} messages)`,
 
           executor:
@@ -225,7 +221,7 @@ export default {
       await replyUserError(interaction, {
         type: ErrorTypes.UNKNOWN,
         message:
-          'An unexpected error occurred during message deletion. Note: Messages older than 14 days cannot be bulk deleted.',
+          'An unexpected error occurred while deleting messages.',
       });
     }
   },
@@ -260,11 +256,12 @@ export default {
     /*
      * Optional target.
      *
-     * Supports:
+     * Supported:
      *
+     * .purge 100
+     * .purge 100 Dyno
      * .purge 100 @Dyno
      * .purge 100 155149108183695360
-     * .purge 100 Dyno
      */
 
     const targetInput =
@@ -324,11 +321,9 @@ export default {
 
       else {
         /*
-         * Search backwards through the channel for messages
-         * sent by the requested user.
+         * Search backwards for messages from the target.
          *
-         * The .purge command itself is excluded because
-         * we always fetch messages before message.id.
+         * Old messages are included.
          */
 
         messagesToDelete =
@@ -344,18 +339,10 @@ export default {
       // DELETE
       // ========================================================
 
-      let deletedCount = 0;
-
-      if (messagesToDelete.length > 0) {
-        const deleted =
-          await channel.bulkDelete(
-            messagesToDelete,
-            true
-          );
-
-        deletedCount =
-          deleted.size;
-      }
+      const deletedCount =
+        await deleteMessagesIndividuallyOrBulk(
+          messagesToDelete
+        );
 
       // ========================================================
       // REACT
@@ -447,6 +434,152 @@ export default {
 };
 
 // ============================================================
+// DELETE MESSAGES
+// ============================================================
+
+async function deleteMessagesIndividuallyOrBulk(
+  messages
+) {
+  if (!messages || messages.length === 0) {
+    return 0;
+  }
+
+  /*
+   * Convert to an array in case a Collection was passed.
+   */
+
+  const messageArray =
+    Array.isArray(messages)
+      ? messages
+      : [...messages.values()];
+
+  const now =
+    Date.now();
+
+  const recentMessages = [];
+  const oldMessages = [];
+
+  /*
+   * Separate messages into:
+   *
+   * - Recent: can use bulkDelete()
+   * - Old: must be deleted individually
+   */
+
+  for (const message of messageArray) {
+    if (!message) {
+      continue;
+    }
+
+    const age =
+      now - message.createdTimestamp;
+
+    if (age < FOURTEEN_DAYS_MS) {
+      recentMessages.push(message);
+    } else {
+      oldMessages.push(message);
+    }
+  }
+
+  let deletedCount = 0;
+
+  // ==========================================================
+  // DELETE RECENT MESSAGES IN BULK
+  // ==========================================================
+
+  if (recentMessages.length > 0) {
+    try {
+      /*
+       * Discord allows up to 100 messages per bulk delete.
+       */
+
+      for (
+        let i = 0;
+        i < recentMessages.length;
+        i += 100
+      ) {
+        const chunk =
+          recentMessages.slice(
+            i,
+            i + 100
+          );
+
+        try {
+          const deleted =
+            await messageArray[0].channel.bulkDelete(
+              chunk,
+              true
+            );
+
+          deletedCount +=
+            deleted.size;
+
+        } catch (error) {
+          /*
+           * If bulk deletion fails for any reason,
+           * fall back to deleting these messages individually.
+           */
+
+          logger.warn(
+            'Bulk deletion failed. Falling back to individual deletion.',
+            error
+          );
+
+          for (const message of chunk) {
+            try {
+              await message.delete(
+                'Purge command'
+              );
+
+              deletedCount++;
+            } catch (deleteError) {
+              logger.warn(
+                `Could not delete message ${message.id}:`,
+                deleteError
+              );
+            }
+          }
+        }
+      }
+    } catch (error) {
+      logger.warn(
+        'Recent message bulk deletion failed:',
+        error
+      );
+    }
+  }
+
+  // ==========================================================
+  // DELETE OLD MESSAGES INDIVIDUALLY
+  // ==========================================================
+
+  if (oldMessages.length > 0) {
+    for (const message of oldMessages) {
+      try {
+        await message.delete(
+          'Purge command'
+        );
+
+        deletedCount++;
+
+      } catch (error) {
+        /*
+         * Ignore messages that have already been deleted
+         * or can no longer be accessed.
+         */
+
+        logger.warn(
+          `Could not individually delete old message ${message.id}:`,
+          error
+        );
+      }
+    }
+  }
+
+  return deletedCount;
+}
+
+// ============================================================
 // FIND MESSAGES BY USER
 // ============================================================
 
@@ -464,8 +597,8 @@ async function findMessagesByUser({
   /*
    * Keep searching until:
    *
-   * 1. We have found the requested number of messages, or
-   * 2. Discord has no more messages to give us.
+   * 1. We have found the requested amount, or
+   * 2. There are no more messages.
    */
 
   while (
@@ -473,11 +606,6 @@ async function findMessagesByUser({
   ) {
     const remaining =
       amount - foundMessages.length;
-
-    /*
-     * Discord allows a maximum of 100 messages
-     * per fetch.
-     */
 
     const fetchLimit =
       Math.min(
@@ -496,27 +624,10 @@ async function findMessagesByUser({
     }
 
     for (const msg of fetched.values()) {
-      /*
-       * Only include messages from the target user.
-       */
-
       if (
         msg.author?.id === userId
       ) {
-        /*
-         * Only include messages that Discord can
-         * bulk delete.
-         *
-         * bulkDelete(..., true) also ignores old messages,
-         * but avoiding them here makes the result cleaner.
-         */
-
-        if (
-          Date.now() - msg.createdTimestamp <
-          14 * 24 * 60 * 60 * 1000
-        ) {
-          foundMessages.push(msg);
-        }
+        foundMessages.push(msg);
       }
 
       if (
@@ -527,8 +638,7 @@ async function findMessagesByUser({
     }
 
     /*
-     * Use the oldest fetched message as the cursor
-     * for the next request.
+     * Get the oldest message we just fetched.
      */
 
     const oldest =
@@ -542,9 +652,8 @@ async function findMessagesByUser({
       oldest.id;
 
     /*
-     * If fewer than 100 messages were returned,
-     * Discord has reached the end of the available
-     * message history.
+     * If Discord returned fewer messages than requested,
+     * there are no more messages to search.
      */
 
     if (
@@ -569,7 +678,7 @@ async function resolveTargetUser(
   input
 ) {
   /*
-   * Remove Discord mention formatting:
+   * Discord mention:
    *
    * <@123456789>
    * <@!123456789>
@@ -611,8 +720,7 @@ async function resolveTargetUser(
     }
 
     /*
-     * The user may not currently be in the guild.
-     * Try fetching them directly from Discord.
+     * The user might not currently be in the guild.
      */
 
     const user =
@@ -624,12 +732,12 @@ async function resolveTargetUser(
   }
 
   /*
-   * Try matching a guild member by:
+   * Try matching:
    *
    * - username
-   * - display name
    * - global name
-   * - tag
+   * - server display name
+   * - Discord tag
    */
 
   const search =
