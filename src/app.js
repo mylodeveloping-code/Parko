@@ -1,31 +1,71 @@
 ﻿import 'dotenv/config';
-import { Client, Collection, GatewayIntentBits } from 'discord.js';
+
+import {
+  Client,
+  Collection,
+  GatewayIntentBits
+} from 'discord.js';
+
 import { REST } from '@discordjs/rest';
 import express from 'express';
 import cron from 'node-cron';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import config from './config/application.js';
-import { getServerCounters, saveServerCounters, updateCounter } from './services/serverstatsService.js';
-import { logger, startupLog, shutdownLog } from './utils/logger.js';
+
+import {
+  getServerCounters,
+  saveServerCounters,
+  updateCounter
+} from './services/serverstatsService.js';
+
+import {
+  logger,
+  startupLog,
+  shutdownLog
+} from './utils/logger.js';
+
 import { checkBirthdays } from './services/birthdayService.js';
 import { checkGiveaways } from './services/giveawayService.js';
+
 import {
   loadCommands,
   registerCommands as registerSlashCommands
 } from './handlers/loaders/commandLoader.js';
+
 import {
   runSafeTask,
   handleTaskError,
   ErrorCodes
 } from './utils/errorHandler.js';
+
 import { initializeDatabase } from './utils/database.js';
 import { initializeMusic } from './services/music/riffySetup.js';
 import { shutdownMusic } from './services/music/playerHandler.js';
+
 import pkg from '../package.json' with { type: 'json' };
+
 import {
   EXPECTED_SCHEMA_VERSION,
   EXPECTED_SCHEMA_LABEL
 } from './config/database/schemaVersion.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+/*
+ * Web files live in:
+ *
+ * TitanBot/
+ * ├── web/
+ * │   ├── index.html
+ * │   ├── player.js
+ * │   └── style.css
+ * └── src/
+ *     └── app.js
+ */
+const WEB_DIRECTORY = path.join(__dirname, '..', 'web');
 
 class TitanBot extends Client {
   constructor() {
@@ -38,17 +78,19 @@ class TitanBot extends Client {
         GatewayIntentBits.MessageContent,
         GatewayIntentBits.DirectMessages,
         GatewayIntentBits.GuildVoiceStates,
-        GatewayIntentBits.GuildBans,
-      ],
+        GatewayIntentBits.GuildBans
+      ]
     });
 
     this.config = config;
+
     this.commands = new Collection();
     this.events = new Collection();
     this.buttons = new Collection();
     this.selectMenus = new Collection();
     this.modals = new Collection();
     this.cooldowns = new Collection();
+
     this.db = null;
 
     this.rest = new REST({
@@ -57,20 +99,19 @@ class TitanBot extends Client {
 
     /*
      * Discord Gateway diagnostics.
-     *
-     * These listeners do NOT expose the bot token.
      */
+
     this.on('connecting', () => {
       startupLog('🔄 Discord Gateway: connecting...');
     });
 
-    this.on('shardConnecting', (id) => {
+    this.on('shardConnecting', id => {
       startupLog(
         `🔄 Discord Gateway: shard ${id} connecting...`
       );
     });
 
-    this.on('shardReady', (id) => {
+    this.on('shardReady', id => {
       startupLog(
         `✅ Discord Gateway: shard ${id} ready`
       );
@@ -82,7 +123,7 @@ class TitanBot extends Client {
       );
     });
 
-    this.on('resumed', (replayed) => {
+    this.on('resumed', replayed => {
       startupLog(
         `🔄 Discord Gateway: session resumed (${replayed} events replayed)`
       );
@@ -94,7 +135,7 @@ class TitanBot extends Client {
       );
     });
 
-    this.on('shardReconnecting', (id) => {
+    this.on('shardReconnecting', id => {
       startupLog(
         `🔄 Discord Gateway: shard ${id} reconnecting...`
       );
@@ -107,7 +148,7 @@ class TitanBot extends Client {
       );
     });
 
-    this.on('error', (error) => {
+    this.on('error', error => {
       logger.error(
         '❌ Discord client error:',
         error?.message || error
@@ -191,6 +232,7 @@ class TitanBot extends Client {
       /*
        * Discord login.
        */
+
       startupLog('Logging into Discord...');
 
       const token =
@@ -222,17 +264,13 @@ class TitanBot extends Client {
                 )
               );
             }, 30000);
-          }),
+          })
         ]);
 
         startupLog(
           'Discord Gateway login promise completed.'
         );
 
-        /*
-         * Wait briefly for the ready event so our
-         * diagnostics can confirm the Gateway session.
-         */
         if (!this.isReady()) {
           startupLog(
             'Discord login completed, waiting for READY event...'
@@ -335,6 +373,47 @@ class TitanBot extends Client {
       this.config.api?.cors?.origin ||
       '*';
 
+    /*
+     * ============================================================
+     * YOUTUBE WEB PLAYER
+     * ============================================================
+     *
+     * Serves:
+     *
+     * /              -> web/index.html
+     * /player.js     -> web/player.js
+     * /style.css     -> web/style.css
+     *
+     * The Discord bot and the YouTube webpage use the same
+     * Express server.
+     */
+
+    app.use(
+      express.static(WEB_DIRECTORY, {
+        index: 'index.html'
+      })
+    );
+
+    /*
+     * Explicitly serve index.html at /
+     * so the root URL always loads the YouTube player.
+     */
+
+    app.get('/', (req, res) => {
+      res.sendFile(
+        path.join(
+          WEB_DIRECTORY,
+          'index.html'
+        )
+      );
+    });
+
+    /*
+     * ============================================================
+     * CORS
+     * ============================================================
+     */
+
     app.use((req, res, next) => {
       const allowedOrigins =
         Array.isArray(corsOrigin)
@@ -371,6 +450,12 @@ class TitanBot extends Client {
       next();
     });
 
+    /*
+     * ============================================================
+     * RATE LIMITING
+     * ============================================================
+     */
+
     const requestCounts =
       new Map();
 
@@ -385,6 +470,7 @@ class TitanBot extends Client {
     app.use((req, res, next) => {
       const ip = req.ip;
       const now = Date.now();
+
       const windowStart =
         now - windowMs;
 
@@ -418,6 +504,12 @@ class TitanBot extends Client {
       next();
     });
 
+    /*
+     * ============================================================
+     * HEALTH
+     * ============================================================
+     */
+
     app.get(
       '/health',
       (req, res) => {
@@ -428,22 +520,33 @@ class TitanBot extends Client {
 
         res.status(200).json({
           status: 'healthy',
+
           timestamp:
             new Date().toISOString(),
+
           uptime:
             process.uptime(),
+
           database: {
             connected:
               dbStatus.connectionType !==
               'none',
+
             degraded:
               dbStatus.isDegraded,
+
             type:
               dbStatus.connectionType
           }
         });
       }
     );
+
+    /*
+     * ============================================================
+     * READY
+     * ============================================================
+     */
 
     app.get(
       '/ready',
@@ -468,8 +571,10 @@ class TitanBot extends Client {
           database: {
             mode:
               dbStatus.connectionType,
+
             degraded:
               dbStatus.isDegraded,
+
             degradedReason:
               dbStatus.degradedReason ??
               null
@@ -497,28 +602,44 @@ class TitanBot extends Client {
           .status(503)
           .json({
             ready: false,
+
             reason:
               !this.isReady()
                 ? 'Bot not Ready'
                 : 'Database degraded',
+
             metrics
           });
       }
     );
 
+    /*
+     * ============================================================
+     * API / ROOT INFORMATION
+     * ============================================================
+     */
+
     app.get(
-      '/',
+      '/api',
       (req, res) => {
         res.status(200).json({
           message:
-            'TitanBot System Online',
+            'TitanBot API Online',
+
           version:
             pkg.version,
+
           timestamp:
             new Date().toISOString()
         });
       }
     );
+
+    /*
+     * ============================================================
+     * SERVER STARTUP
+     * ============================================================
+     */
 
     const startServer = (
       port,
@@ -540,6 +661,10 @@ class TitanBot extends Client {
 
             startupLog(
               `✅ Web Server running on ${host}:${port}`
+            );
+
+            startupLog(
+              `🌐 YouTube Player: http://${host}:${port}/`
             );
 
             startupLog(

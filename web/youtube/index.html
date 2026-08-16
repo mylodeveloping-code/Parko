@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <title>TitanBot YouTube</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            background: #0f0f0f;
+            color: #ffffff;
+            font-family: Arial, Helvetica, sans-serif;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .container {
+            width: min(1000px, 94vw);
+            padding: 30px 0;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 25px;
+        }
+
+        .header h1 {
+            margin: 0;
+            font-size: 32px;
+        }
+
+        .header p {
+            margin-top: 8px;
+            color: #aaa;
+        }
+
+        .search {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 25px;
+        }
+
+        .search input {
+            flex: 1;
+            padding: 14px 16px;
+            border: 1px solid #333;
+            border-radius: 8px;
+            background: #181818;
+            color: white;
+            font-size: 16px;
+            outline: none;
+        }
+
+        .search input:focus {
+            border-color: #555;
+        }
+
+        .search button {
+            padding: 14px 22px;
+            border: none;
+            border-radius: 8px;
+            background: #ff0000;
+            color: white;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        .search button:hover {
+            background: #cc0000;
+        }
+
+        .player {
+            display: none;
+            background: #181818;
+            border-radius: 12px;
+            overflow: hidden;
+            border: 1px solid #292929;
+        }
+
+        .video-wrapper {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 16 / 9;
+            background: black;
+        }
+
+        iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+
+        .video-info {
+            padding: 20px;
+        }
+
+        .video-info h2 {
+            margin: 0 0 8px;
+            font-size: 22px;
+        }
+
+        .video-info p {
+            margin: 0;
+            color: #aaa;
+        }
+
+        .error {
+            display: none;
+            padding: 14px;
+            margin-bottom: 20px;
+            border-radius: 8px;
+            background: #3a1111;
+            color: #ff8f8f;
+            border: 1px solid #6b2020;
+        }
+
+        @media (max-width: 600px) {
+            .search {
+                flex-direction: column;
+            }
+
+            .search button {
+                width: 100%;
+            }
+
+            .header h1 {
+                font-size: 26px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <main class="container">
+
+        <div class="header">
+            <h1>🎬 TitanBot YouTube</h1>
+            <p>Enter a YouTube URL to watch the video.</p>
+        </div>
+
+        <div class="search">
+            <input
+                id="youtubeUrl"
+                type="text"
+                placeholder="Paste a YouTube URL..."
+                autocomplete="off"
+            >
+
+            <button id="loadButton">
+                Watch
+            </button>
+        </div>
+
+        <div id="error" class="error"></div>
+
+        <section id="player" class="player">
+
+            <div class="video-wrapper">
+                <iframe
+                    id="youtubePlayer"
+                    title="YouTube Video Player"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                    allowfullscreen
+                ></iframe>
+            </div>
+
+            <div class="video-info">
+                <h2 id="videoTitle">
+                    YouTube Video
+                </h2>
+
+                <p id="videoUrl"></p>
+            </div>
+
+        </section>
+
+    </main>
+
+    <script>
+        const urlInput =
+            document.getElementById('youtubeUrl');
+
+        const loadButton =
+            document.getElementById('loadButton');
+
+        const player =
+            document.getElementById('player');
+
+        const youtubePlayer =
+            document.getElementById('youtubePlayer');
+
+        const videoTitle =
+            document.getElementById('videoTitle');
+
+        const videoUrl =
+            document.getElementById('videoUrl');
+
+        const errorBox =
+            document.getElementById('error');
+
+        function getYouTubeVideoId(url) {
+            try {
+                const parsed = new URL(url);
+
+                if (
+                    parsed.hostname === 'youtu.be' ||
+                    parsed.hostname === 'www.youtu.be'
+                ) {
+                    return parsed.pathname
+                        .replace('/', '')
+                        .split('/')[0];
+                }
+
+                if (
+                    parsed.hostname === 'youtube.com' ||
+                    parsed.hostname === 'www.youtube.com' ||
+                    parsed.hostname === 'm.youtube.com'
+                ) {
+                    if (parsed.pathname === '/watch') {
+                        return parsed.searchParams.get('v');
+                    }
+
+                    if (parsed.pathname.startsWith('/shorts/')) {
+                        return parsed.pathname
+                            .split('/')[2]
+                            ?.split('?')[0];
+                    }
+
+                    if (parsed.pathname.startsWith('/live/')) {
+                        return parsed.pathname
+                            .split('/')[2]
+                            ?.split('?')[0];
+                    }
+                }
+
+                return null;
+            } catch {
+                return null;
+            }
+        }
+
+        function showError(message) {
+            errorBox.textContent = message;
+            errorBox.style.display = 'block';
+            player.style.display = 'none';
+        }
+
+        function loadVideo() {
+            const url = urlInput.value.trim();
+
+            errorBox.style.display = 'none';
+
+            if (!url) {
+                showError(
+                    'Please enter a YouTube URL.'
+                );
+                return;
+            }
+
+            const videoId =
+                getYouTubeVideoId(url);
+
+            if (!videoId) {
+                showError(
+                    'That does not appear to be a valid YouTube video URL.'
+                );
+                return;
+            }
+
+            youtubePlayer.src =
+                `https://www.youtube.com/embed/${encodeURIComponent(videoId)}?rel=0`;
+
+            videoTitle.textContent =
+                'YouTube Video';
+
+            videoUrl.textContent =
+                url;
+
+            player.style.display = 'block';
+        }
+
+        loadButton.addEventListener(
+            'click',
+            loadVideo
+        );
+
+        urlInput.addEventListener(
+            'keydown',
+            event => {
+                if (event.key === 'Enter') {
+                    loadVideo();
+                }
+            }
+        );
+    </script>
+
+</body>
+</html>
