@@ -1,4 +1,4 @@
-# Security Policy — TitanBot
+# Security Policy — Vivid
 
 We take security seriously. If you discover a vulnerability, please follow the policy below so we can triage and address it safely.
 

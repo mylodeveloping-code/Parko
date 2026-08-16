@@ -1,6 +1,6 @@
-# Contributing to TitanBot
+# Contributing to Vivid
 
-Thank you for your interest in contributing to TitanBot! This guide covers local setup, project conventions, and what we look for in pull requests.
+Thank you for your interest in contributing to Vivid! This guide covers local setup, project conventions, and what we look for in pull requests.
 
 ## Ways to Contribute
 
@@ -39,7 +39,7 @@ Before starting large features, open an issue or discuss in the [support server]
    npm start
    ```
 
-For Docker-based setup, see [README.md](README.md#docker-deployment-recommended).
+
 
 ## Development Workflow
 
@@ -55,7 +55,7 @@ Use descriptive branch names, for example:
 
 ## Database & Migrations
 
-TitanBot uses PostgreSQL as its primary store. If PostgreSQL is unreachable at startup, the bot can operate in a **degraded in-memory mode** — but that mode is not suitable for production and should not be the only way you test persistence-related changes.
+Vivid uses PostgreSQL as its primary store. If PostgreSQL is unreachable at startup, the bot can operate in a **degraded in-memory mode** — but that mode is not suitable for production and should not be the only way you test persistence-related changes.
 
 Useful commands:
 
