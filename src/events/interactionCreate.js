@@ -1,4 +1,4 @@
-import { Events, MessageFlags } from 'discord.js';
+import { Events } from 'discord.js';
 import { logger } from '../utils/logger.js';
 import { getGuildConfig } from '../services/config/guildConfig.js';
 import {
@@ -15,6 +15,7 @@ import {
   ErrorTypes,
   ErrorCodes,
 } from '../utils/errorHandler.js';
+import { InteractionHelper } from '../utils/interactionHelper.js';
 import {
   createInteractionTraceContext,
   runWithTraceContext,
@@ -29,23 +30,16 @@ import { resolveSlashAccessKey } from '../utils/messageAdapter.js';
 import { isCollectorManagedComponent } from '../utils/collectorComponents.js';
 import { ResponseCoordinator } from '../utils/responseCoordinator.js';
 import { enforceDefaultCommandPermissions } from '../utils/permissionGuard.js';
-
 import { isBlacklisted } from '../utils/blacklist.js';
 
 // ============================================================
 // PB ACCESS
 // ============================================================
 
-// Users with this role can use commands regardless of the
-// normal Discord permission requirements.
-//
-// IMPORTANT:
-// PB Access does NOT exempt anyone from moderation/punishment.
-// It ONLY bypasses command permission checks.
 const PB_ACCESS_ROLE_ID = '1537847398746030100';
 
-// Commands that blacklisted users are allowed to use.
-// These are specifically needed so staff can remove a blacklist.
+// Commands that blacklisted users are still allowed to use.
+// These are needed so moderators can remove the blacklist.
 const BLACKLIST_MANAGEMENT_COMMANDS = new Set([
   'bl',
   'unbl',
@@ -76,6 +70,52 @@ function withTraceContext(context = {}, traceContext = {}) {
     ...context,
   };
 }
+
+// ============================================================
+// BLACKLIST RESPONSE
+// ============================================================
+
+async function handleBlacklistedUser(interaction) {
+  const embed = {
+    title: '🚫 You Are Blacklisted',
+    description:
+      'You are currently **blacklisted from using this bot**.\n\n' +
+      'You do not have permission to use any of the bot\'s commands while you are blacklisted.\n\n' +
+      'If you believe this was a mistake, please contact a server administrator.',
+    color: 0xff0000,
+  };
+
+  // Send the user a private DM as well.
+  try {
+    await interaction.user.send({
+      embeds: [embed],
+    });
+  } catch (error) {
+    logger.debug(
+      `Could not DM blacklisted user ${interaction.user.tag}.`,
+      error
+    );
+  }
+
+  // Acknowledge the interaction with a private/ephemeral response.
+  try {
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({
+        embeds: [embed],
+        ephemeral: true,
+      });
+    }
+  } catch (error) {
+    logger.debug(
+      `Could not send blacklist response to ${interaction.user.tag}.`,
+      error
+    );
+  }
+}
+
+// ============================================================
+// INTERACTION CREATE
+// ============================================================
 
 export default {
   name: Events.InteractionCreate,
@@ -123,24 +163,13 @@ export default {
                 }
               );
 
-              // ==============================================
+              // ==================================================
               // BLACKLIST CHECK
-              // ==============================================
-              //
-              // This MUST happen before normal command
-              // permission checks. Otherwise a blacklisted
-              // user can trigger the generic error handler
-              // and receive "Something went wrong."
-              //
-              // .bl and .unbl are intentionally allowed so
-              // authorized staff can manage the blacklist.
+              // ==================================================
 
               const commandName =
-                String(
-                  interaction.commandName || ''
-                )
-                  .trim()
-                  .toLowerCase();
+                interaction.commandName
+                  ?.toLowerCase();
 
               if (
                 isBlacklisted(
@@ -154,39 +183,16 @@ export default {
                   `Blocked blacklisted user ${interaction.user.tag} (${interaction.user.id}) from using /${commandName}.`
                 );
 
-                const blacklistMessage =
-                  '🚫 **You are blacklisted from using this bot.**\n\n' +
-                  'You do not have permission to use any commands from this bot.';
-
-                if (
-                  interaction.replied ||
-                  interaction.deferred
-                ) {
-                  await interaction
-                    .followUp({
-                      content:
-                        blacklistMessage,
-                      flags:
-                        MessageFlags.Ephemeral,
-                    })
-                    .catch(() => {});
-                } else {
-                  await interaction
-                    .reply({
-                      content:
-                        blacklistMessage,
-                      flags:
-                        MessageFlags.Ephemeral,
-                    })
-                    .catch(() => {});
-                }
+                await handleBlacklistedUser(
+                  interaction
+                );
 
                 return;
               }
 
-              // ==============================================
-              // INPUT VALIDATION
-              // ==============================================
+              // ==================================================
+              // VALIDATE INPUT
+              // ==================================================
 
               validateChatInputPayloadOrThrow(
                 interaction,
@@ -504,6 +510,20 @@ export default {
           else if (
             interaction.isAutocomplete()
           ) {
+            // Blacklisted users should not receive
+            // autocomplete results.
+            if (
+              isBlacklisted(
+                interaction.user.id
+              )
+            ) {
+              await interaction
+                .respond([])
+                .catch(() => {});
+
+              return;
+            }
+
             const autocompleteCommand =
               client.commands.get(
                 interaction.commandName
@@ -821,7 +841,7 @@ export default {
                               value:
                                 panel.messageId,
                             };
-                          } catch (e) {
+                          } catch {
                             return null;
                           }
                         }
