@@ -3,20 +3,20 @@ import {
   PermissionFlagsBits,
 } from 'discord.js';
 
-import { createEmbed } from '../../utils/embeds.js';
+import { successEmbed } from '../../utils/embeds.js';
 import { logger } from '../../utils/logger.js';
-import { logEvent } from '../../utils/moderation.js';
+import { replyUserError, ErrorTypes } from '../../utils/errorHandler.js';
 
 const AUA_ROLE_ID = '1537847398746030100';
 
 export default {
   data: new SlashCommandBuilder()
     .setName('aua')
-    .setDescription('Give a user the AU Access role.')
+    .setDescription('Toggle AU Access for a user')
     .addUserOption((option) =>
       option
         .setName('user')
-        .setDescription('The user to give AU Access to.')
+        .setDescription('The user to toggle AU Access for')
         .setRequired(true)
     )
     .setDefaultMemberPermissions(
@@ -25,135 +25,162 @@ export default {
 
   category: 'moderation',
 
-  abuseProtection: {
-    maxAttempts: 10,
-    windowMs: 60_000,
-  },
+  async execute(interaction) {
+    const user =
+      interaction.options.getUser('user');
 
-  async execute(interaction, config, client) {
+    const member =
+      await interaction.guild.members
+        .fetch(user.id)
+        .catch(() => null);
+
+    if (!member) {
+      return replyUserError(interaction, {
+        type: ErrorTypes.NOT_FOUND,
+        message: 'That user is not in this server.',
+      });
+    }
+
+    const role =
+      interaction.guild.roles.cache.get(AUA_ROLE_ID);
+
+    if (!role) {
+      return replyUserError(interaction, {
+        type: ErrorTypes.UNKNOWN,
+        message: 'The AU Access role could not be found.',
+      });
+    }
+
+    if (!role.editable) {
+      return replyUserError(interaction, {
+        type: ErrorTypes.PERMISSION,
+        message:
+          'I cannot manage the AU Access role. Make sure my highest role is above it.',
+      });
+    }
+
     try {
-      const user =
-        interaction.options.getUser('user');
+      const hasRole =
+        member.roles.cache.has(AUA_ROLE_ID);
 
-      const member =
-        await interaction.guild.members
-          .fetch(user.id)
-          .catch(() => null);
-
-      if (!member) {
-        return interaction.reply({
-          embeds: [
-            createEmbed({
-              title: 'User Not Found',
-              description:
-                'That user is not currently in this server.',
-              color: 'error',
-            }),
-          ],
-        });
-      }
-
-      const role =
-        interaction.guild.roles.cache.get(
-          AUA_ROLE_ID
+      if (hasRole) {
+        await member.roles.remove(
+          role,
+          `AU Access removed by ${interaction.user.tag}`
         );
 
-      if (!role) {
-        logger.error(
-          `AU Access role ${AUA_ROLE_ID} was not found in guild ${interaction.guild.id}.`
+        await interaction.reply({
+          embeds: [
+            successEmbed(
+              'AU Access Removed',
+              `Removed the **AU Access** role from ${member}.`
+            ),
+          ],
+        });
+
+        logger.info(
+          `Removed AU Access from ${member.user.tag} (${member.id}) by ${interaction.user.tag}`
+        );
+      } else {
+        await member.roles.add(
+          role,
+          `AU Access granted by ${interaction.user.tag}`
         );
 
-        return interaction.reply({
+        await interaction.reply({
           embeds: [
-            createEmbed({
-              title: 'Role Not Found',
-              description:
-                'The AU Access role could not be found.',
-              color: 'error',
-            }),
+            successEmbed(
+              'AU Access Granted',
+              `Gave **AU Access** to ${member}.`
+            ),
           ],
         });
+
+        logger.info(
+          `Granted AU Access to ${member.user.tag} (${member.id}) by ${interaction.user.tag}`
+        );
       }
-
-      if (!role.editable) {
-        return interaction.reply({
-          embeds: [
-            createEmbed({
-              title: 'Cannot Give Role',
-              description:
-                'I cannot manage the AU Access role. Make sure my bot role is above it.',
-              color: 'error',
-            }),
-          ],
-        });
-      }
-
-      if (member.roles.cache.has(AUA_ROLE_ID)) {
-        return interaction.reply({
-          embeds: [
-            createEmbed({
-              title: 'Already Has AU Access',
-              description:
-                `${user} already has the **AU Access** role.`,
-              color: 'info',
-            }),
-          ],
-        });
-      }
-
-      await member.roles.add(
-        role,
-        `AU Access granted by ${interaction.user.tag}`
-      );
-
-      await logEvent({
-        client,
-        guild: interaction.guild,
-        event: {
-          action: 'AU Access Granted',
-          target:
-            `${user.tag} (${user.id})`,
-          executor:
-            `${interaction.user.tag} (${interaction.user.id})`,
-          reason:
-            'AU Access role granted.',
-          metadata: {
-            userId: user.id,
-            moderatorId:
-              interaction.user.id,
-            roleId: AUA_ROLE_ID,
-            roleName: 'AU Access',
-          },
-        },
-      });
-
-      return interaction.reply({
-        embeds: [
-          createEmbed({
-            title: 'AU Access Granted',
-            description:
-              `${user} has been given the **AU Access** role.\n\n` +
-              'They can now use commands without normal command restrictions, except commands with your specific name permission.',
-            color: 'success',
-          }),
-        ],
-      });
     } catch (error) {
       logger.error(
-        'AU Access command error:',
+        'Error toggling AU Access:',
         error
       );
 
-      return interaction.reply({
-        embeds: [
-          createEmbed({
-            title: 'Error',
-            description:
-              'An unexpected error occurred while giving AU Access.',
-            color: 'error',
-          }),
-        ],
-      }).catch(() => {});
+      return replyUserError(interaction, {
+        type: ErrorTypes.UNKNOWN,
+        message:
+          'I could not change the AU Access role.',
+      });
+    }
+  },
+
+  async messageExecute(message, args) {
+    if (!message?.guild) {
+      return;
+    }
+
+    if (
+      !message.member?.permissions.has(
+        PermissionFlagsBits.ManageRoles
+      )
+    ) {
+      return;
+    }
+
+    const userId = args?.[0]?.replace(/[<@!>]/g, '');
+
+    if (!userId || !/^\d+$/.test(userId)) {
+      return;
+    }
+
+    const member =
+      await message.guild.members
+        .fetch(userId)
+        .catch(() => null);
+
+    if (!member) {
+      return;
+    }
+
+    const role =
+      message.guild.roles.cache.get(AUA_ROLE_ID);
+
+    if (!role || !role.editable) {
+      return;
+    }
+
+    try {
+      const hasRole =
+        member.roles.cache.has(AUA_ROLE_ID);
+
+      if (hasRole) {
+        await member.roles.remove(
+          role,
+          `AU Access removed by ${message.author.tag}`
+        );
+
+        await message.react('👍').catch(() => {});
+
+        logger.info(
+          `Removed AU Access from ${member.user.tag} (${member.id}) by ${message.author.tag}`
+        );
+      } else {
+        await member.roles.add(
+          role,
+          `AU Access granted by ${message.author.tag}`
+        );
+
+        await message.react('👍').catch(() => {});
+
+        logger.info(
+          `Granted AU Access to ${member.user.tag} (${member.id}) by ${message.author.tag}`
+        );
+      }
+    } catch (error) {
+      logger.error(
+        'Error toggling AU Access:',
+        error
+      );
     }
   },
 };
