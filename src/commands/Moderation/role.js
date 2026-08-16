@@ -10,35 +10,46 @@ import { TitanBotError, ErrorTypes } from '../../utils/errorHandler.js';
 export default {
     data: new SlashCommandBuilder()
         .setName("role")
-        .setDescription("Toggle a role for a user")
-        .addUserOption((option) =>
-            option
-                .setName("target")
-                .setDescription("The user to toggle the role for")
-                .setRequired(true),
+        .setDescription("Toggle a role for a user or everyone")
+        .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
+
+        // /role user
+        .addSubcommand((subcommand) =>
+            subcommand
+                .setName("user")
+                .setDescription("Toggle a role for a specific user")
+                .addUserOption((option) =>
+                    option
+                        .setName("target")
+                        .setDescription("The user to toggle the role for")
+                        .setRequired(true),
+                )
+                .addStringOption((option) =>
+                    option
+                        .setName("role")
+                        .setDescription("The name of the role to toggle")
+                        .setRequired(true),
+                ),
         )
-        .addStringOption((option) =>
-            option
-                .setName("role")
-                .setDescription("The name of the role to toggle")
-                .setRequired(true),
-        )
-        .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles),
+
+        // /role all
+        .addSubcommand((subcommand) =>
+            subcommand
+                .setName("all")
+                .setDescription("Toggle a role for everyone in the server")
+                .addStringOption((option) =>
+                    option
+                        .setName("role")
+                        .setDescription("The name of the role to toggle")
+                        .setRequired(true),
+                ),
+        ),
 
     category: "moderation",
 
     async execute(interaction, config, client) {
-        const target = interaction.options.getMember("target");
+        const subcommand = interaction.options.getSubcommand();
         const roleName = interaction.options.getString("role");
-
-        if (!target) {
-            throw new TitanBotError(
-                "Missing target member",
-                ErrorTypes.USER_INPUT,
-                "That user could not be found in this server.",
-                { subtype: "invalid_user" },
-            );
-        }
 
         if (!roleName) {
             throw new TitanBotError(
@@ -107,36 +118,150 @@ export default {
             );
         }
 
-        const hasRole = target.roles.cache.has(role.id);
+        // ==========================================
+        // /role user
+        // ==========================================
 
-        if (hasRole) {
-            await target.roles.remove(
-                role,
-                `Role toggled by ${interaction.user.tag}`,
+        if (subcommand === "user") {
+            const target = interaction.options.getMember("target");
+
+            if (!target) {
+                throw new TitanBotError(
+                    "Missing target member",
+                    ErrorTypes.USER_INPUT,
+                    "That user could not be found in this server.",
+                    { subtype: "invalid_user" },
+                );
+            }
+
+            // Discord will not allow the bot to modify a member
+            // whose highest role is equal to or higher than the bot's.
+            if (
+                target.id !== interaction.guild.ownerId &&
+                target.roles.highest.position >= botMember.roles.highest.position
+            ) {
+                throw new TitanBotError(
+                    "Member too high",
+                    ErrorTypes.PERMISSION,
+                    "I cannot manage that user because their highest role is higher than or equal to my highest role.",
+                );
+            }
+
+            const hasRole = target.roles.cache.has(role.id);
+
+            if (hasRole) {
+                await target.roles.remove(
+                    role,
+                    `Role toggled by ${interaction.user.tag}`,
+                );
+
+                await InteractionHelper.universalReply(interaction, {
+                    embeds: [
+                        successEmbed(
+                            "➖ **Role Removed**",
+                            `Removed **${role.name}** from **${target.user.tag}**.`,
+                        ),
+                    ],
+                });
+            } else {
+                await target.roles.add(
+                    role,
+                    `Role toggled by ${interaction.user.tag}`,
+                );
+
+                await InteractionHelper.universalReply(interaction, {
+                    embeds: [
+                        successEmbed(
+                            "➕ **Role Added**",
+                            `Added **${role.name}** to **${target.user.tag}**.`,
+                        ),
+                    ],
+                });
+            }
+
+            return;
+        }
+
+        // ==========================================
+        // /role all
+        // ==========================================
+
+        if (subcommand === "all") {
+            await interaction.deferReply();
+
+            const members = await interaction.guild.members.fetch();
+
+            // Determine whether we're adding or removing.
+            // If at least one member doesn't have the role,
+            // add it to everyone who can receive it.
+            // Otherwise, remove it from everyone who has it.
+            const manageableMembers = members.filter(
+                (member) =>
+                    member.id !== interaction.guild.ownerId &&
+                    member.roles.highest.position < botMember.roles.highest.position,
             );
 
-            await InteractionHelper.universalReply(interaction, {
+            const membersWithoutRole = manageableMembers.filter(
+                (member) => !member.roles.cache.has(role.id),
+            );
+
+            const membersWithRole = manageableMembers.filter(
+                (member) => member.roles.cache.has(role.id),
+            );
+
+            // If everyone the bot can manage already has the role,
+            // remove it from everyone.
+            const shouldRemove = membersWithoutRole.size === 0;
+
+            let changed = 0;
+            let skipped = 0;
+
+            for (const member of manageableMembers.values()) {
+                try {
+                    if (shouldRemove) {
+                        if (member.roles.cache.has(role.id)) {
+                            await member.roles.remove(
+                                role,
+                                `Role toggled for everyone by ${interaction.user.tag}`,
+                            );
+
+                            changed++;
+                        }
+                    } else {
+                        if (!member.roles.cache.has(role.id)) {
+                            await member.roles.add(
+                                role,
+                                `Role toggled for everyone by ${interaction.user.tag}`,
+                            );
+
+                            changed++;
+                        }
+                    }
+                } catch {
+                    skipped++;
+                }
+            }
+
+            const action = shouldRemove ? "Removed" : "Added";
+
+            await interaction.editReply({
                 embeds: [
                     successEmbed(
-                        "➖ **Role Removed**",
-                        `Removed **${role.name}** from **${target.user.tag}**.`,
+                        shouldRemove
+                            ? "➖ **Role Removed From Everyone**"
+                            : "➕ **Role Added To Everyone**",
+                        `${action} **${role.name}** ${
+                            shouldRemove ? "from" : "to"
+                        } **${changed}** member(s).${
+                            skipped > 0
+                                ? ` Skipped **${skipped}** member(s) that could not be modified.`
+                                : ""
+                        }`,
                     ),
                 ],
             });
-        } else {
-            await target.roles.add(
-                role,
-                `Role toggled by ${interaction.user.tag}`,
-            );
 
-            await InteractionHelper.universalReply(interaction, {
-                embeds: [
-                    successEmbed(
-                        "➕ **Role Added**",
-                        `Added **${role.name}** to **${target.user.tag}**.`,
-                    ),
-                ],
-            });
+            return;
         }
     },
 };
