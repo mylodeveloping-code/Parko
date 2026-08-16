@@ -11,17 +11,31 @@ export function buildPrefixUsage(prefix, commandData, validation) {
   const commandJson = getCommandJson(commandData);
   const usageParts = [`${prefix}${commandJson.name}`];
 
+  // Use a custom usage string if the command provides one.
+  // This allows commands such as:
+  // usage: "[all, target]"
+  // to display:
+  // .role [all, target]
+  if (commandData?.usage) {
+    usageParts.push(commandData.usage);
+    return usageParts.filter(Boolean).join(' ');
+  }
+
   if (validation.subcommandGroupName) {
     usageParts.push(validation.subcommandGroupName);
   }
 
   if (validation.subcommandName) {
     usageParts.push(validation.subcommandName);
-  } else if (!validation.subcommandGroupName && commandJson.options?.some((opt) => opt.type === 1)) {
+  } else if (
+    !validation.subcommandGroupName &&
+    commandJson.options?.some((opt) => opt.type === 1)
+  ) {
     usageParts.push('[subcommand]');
   }
 
   const optionDefs = validation.optionDefs || [];
+
   for (const option of optionDefs) {
     usageParts.push(`[${option.name}]`);
   }
@@ -102,6 +116,7 @@ export class ResponseCoordinator {
     }
 
     const existing = this.getReplyMessage();
+
     if (existing) {
       return this.edit(payload);
     }
@@ -118,6 +133,7 @@ export class ResponseCoordinator {
       if (this.isPrefixInteraction()) {
         return this.sendPrefixPayload(payload);
       }
+
       await this.interaction.editReply(payload);
       return null;
     }
@@ -126,6 +142,7 @@ export class ResponseCoordinator {
       if (this.message?.channel) {
         return this.message.channel.send(payload);
       }
+
       await this.interaction.followUp(payload);
       return null;
     }
@@ -144,16 +161,19 @@ export class ResponseCoordinator {
     }
 
     const existing = this.getReplyMessage();
+
     if (existing) {
       try {
         return await existing.edit(payload);
       } catch (error) {
         logger.debug(`ResponseCoordinator edit failed: ${error.message}`);
+
         if (this.message?.channel) {
           const sentMessage = await this.message.channel.send(payload);
           this.setReplyMessage(sentMessage);
           return sentMessage;
         }
+
         throw error;
       }
     }
