@@ -174,10 +174,6 @@ async function handleAntiSpam(message, client) {
             return;
         }
 
-        /*
-         * Don't process another spam offense while the user
-         * is already timed out.
-         */
         if (
             member.communicationDisabledUntilTimestamp &&
             member.communicationDisabledUntilTimestamp > Date.now()
@@ -199,17 +195,11 @@ async function handleAntiSpam(message, client) {
 
         const messages = guildTracker.get(userId);
 
-        /*
-         * Keep only messages from the last 3 seconds.
-         */
         const recentMessages = messages.filter(
             (entry) =>
                 now - entry.timestamp <= SPAM_WINDOW_MS
         );
 
-        /*
-         * Add this message to the current burst.
-         */
         recentMessages.push({
             timestamp: now,
             message,
@@ -220,9 +210,6 @@ async function handleAntiSpam(message, client) {
             recentMessages
         );
 
-        /*
-         * Need at least 5 messages within 3 seconds.
-         */
         if (
             recentMessages.length <
             SPAM_MESSAGE_COUNT
@@ -240,30 +227,12 @@ async function handleAntiSpam(message, client) {
         spamProcessing.add(processingKey);
 
         try {
-            /*
-             * Copy the complete spam burst.
-             */
             const spamMessages = [
                 ...recentMessages
             ];
 
-            /*
-             * Clear the tracker immediately so a new burst
-             * cannot become mixed with this one.
-             */
             guildTracker.set(userId, []);
 
-            // =================================================
-            // DELETE ALL SPAM MESSAGES
-            // =================================================
-
-            /*
-             * Unlike the previous version, we do NOT only delete
-             * duplicate-content messages.
-             *
-             * Every message that was part of the detected
-             * 5-message spam burst is now targeted for deletion.
-             */
             const messagesToDelete = spamMessages
                 .map(entry => entry?.message)
                 .filter(Boolean);
@@ -278,13 +247,6 @@ async function handleAntiSpam(message, client) {
 
                 if (deletableMessages.length > 0) {
                     try {
-                        /*
-                         * Bulk delete the entire detected burst.
-                         *
-                         * filterOld=true prevents Discord from
-                         * attempting to bulk-delete messages older
-                         * than the API allows.
-                         */
                         await message.channel.bulkDelete(
                             deletableMessages,
                             true
@@ -299,10 +261,6 @@ async function handleAntiSpam(message, client) {
                             bulkDeleteError
                         );
 
-                        /*
-                         * Fallback: individually delete every
-                         * message that Discord allows us to delete.
-                         */
                         await Promise.allSettled(
                             deletableMessages.map(
                                 async spamMessage => {
@@ -323,10 +281,6 @@ async function handleAntiSpam(message, client) {
                     }
                 }
             }
-
-            // =================================================
-            // PROCESS PUNISHMENT
-            // =================================================
 
             await processSpamOffense(
                 message,
@@ -379,10 +333,6 @@ async function processSpamOffense(
 
     let manuallyUnmutedPBExempt = false;
 
-    /*
-     * Detect an automatic timeout that was manually removed
-     * before it naturally expired.
-     */
     if (previousTimeout) {
         const timeoutShouldStillBeActive =
             now < previousTimeout.expiresAt;
@@ -415,12 +365,6 @@ async function processSpamOffense(
         }
     }
 
-    /*
-     * Normal users advance one offense.
-     *
-     * PB Exempt users whose timeout was manually removed
-     * early repeat their previous offense level.
-     */
     if (!manuallyUnmutedPBExempt) {
         offenseLevel += 1;
 
@@ -657,9 +601,6 @@ async function processSpamOffense(
                     'Further spam will result in Warning #2 and a 24-hour timeout.',
             });
 
-        /*
-         * Warning #1 AND 6-hour timeout.
-         */
         await applySpamTimeout({
             message,
             member,
@@ -701,9 +642,6 @@ async function processSpamOffense(
                     'Further spam will result in Warning #3 and a 30-day ban.',
             });
 
-        /*
-         * Warning #2 AND 24-hour timeout.
-         */
         await applySpamTimeout({
             message,
             member,
@@ -1312,27 +1250,41 @@ async function handlePrefixCommand(
         }
 
         // ====================================================
-        // BLACKLIST CHECK
+        // GET COMMAND NAME AND ARGUMENTS
         // ====================================================
-
-        /*
-         * Blacklisted users cannot use any prefix command.
-         *
-         * This check happens immediately after confirming that
-         * the message is a prefix command, before resolving or
-         * executing the command.
-         *
-         * The .bl and .unbl commands therefore also cannot be
-         * used by someone who has already been blacklisted.
-         */
-        if (isBlacklisted(message.author.id)) {
-            return;
-        }
 
         let {
             commandName,
             args,
         } = parsed;
+
+        // ====================================================
+        // BLACKLIST CHECK
+        // ====================================================
+
+        /*
+         * Blacklisted users cannot use normal prefix commands.
+         *
+         * .bl and .unbl are intentionally allowed through this
+         * check so blacklist management can still function.
+         *
+         * The actual permission check for these commands is
+         * handled by the normal command permission system.
+         */
+        const blacklistCommand =
+            commandName.toLowerCase() === 'bl' ||
+            commandName.toLowerCase() === 'unbl';
+
+        if (
+            isBlacklisted(message.author.id) &&
+            !blacklistCommand
+        ) {
+            return;
+        }
+
+        // ====================================================
+        // MUSIC PREFIX SHORTCUTS
+        // ====================================================
 
         const musicPrefixShortcut =
             commandName.toLowerCase();
