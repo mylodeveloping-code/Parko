@@ -2,12 +2,15 @@ import {
     SlashCommandBuilder,
     PermissionFlagsBits,
 } from 'discord.js';
+
 import { successEmbed } from '../../utils/embeds.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
+
 import {
     blacklistUser,
     isBlacklisted,
 } from '../../utils/blacklist.js';
+
 import {
     TitanBotError,
     ErrorTypes,
@@ -16,11 +19,15 @@ import {
 export default {
     data: new SlashCommandBuilder()
         .setName('bl')
-        .setDescription('Blacklist a user from using the bot')
+        .setDescription(
+            'Blacklist a user from using the bot'
+        )
         .addStringOption((option) =>
             option
                 .setName('user_id')
-                .setDescription('The Discord user ID to blacklist')
+                .setDescription(
+                    'The Discord user ID to blacklist'
+                )
                 .setRequired(true)
         )
         .setDefaultMemberPermissions(
@@ -29,11 +36,15 @@ export default {
 
     category: 'moderation',
 
-    async execute(interaction, config, client) {
+    async execute(
+        interaction,
+        config,
+        client
+    ) {
         const userId =
-            interaction.options.getString(
-                'user_id'
-            )?.trim();
+            interaction.options
+                .getString('user_id')
+                ?.trim();
 
         if (!userId) {
             throw new TitanBotError(
@@ -63,8 +74,8 @@ export default {
         }
 
         if (
-            userId ===
-            client.user.id
+            client.user &&
+            userId === client.user.id
         ) {
             throw new TitanBotError(
                 'Cannot blacklist bot',
@@ -73,9 +84,7 @@ export default {
             );
         }
 
-        if (
-            isBlacklisted(userId)
-        ) {
+        if (isBlacklisted(userId)) {
             throw new TitanBotError(
                 'Already blacklisted',
                 ErrorTypes.VALIDATION,
@@ -83,10 +92,10 @@ export default {
             );
         }
 
-        const success =
+        const saved =
             blacklistUser(userId);
 
-        if (!success) {
+        if (!saved) {
             throw new TitanBotError(
                 'Blacklist failed',
                 ErrorTypes.INTERNAL,
@@ -106,7 +115,7 @@ export default {
             userText =
                 `**${user.tag}** (\`${userId}\`)`;
         } catch {
-            // User may not be fetchable.
+            // User does not need to be fetchable.
         }
 
         await InteractionHelper.universalReply(
@@ -115,7 +124,7 @@ export default {
                 embeds: [
                     successEmbed(
                         '🚫 User Blacklisted',
-                        `${userText} has been blacklisted and can no longer use any commands from this bot.`
+                        `${userText} has been blacklisted and no longer has permission to use any commands from this bot.`
                     ),
                 ],
             }

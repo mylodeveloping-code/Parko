@@ -1,10 +1,12 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { logger } from './logger.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Store the blacklist outside src/utils.
 const DATA_DIR = path.join(__dirname, '../../data');
 const BLACKLIST_FILE = path.join(DATA_DIR, 'blacklist.json');
 
@@ -19,37 +21,54 @@ function ensureBlacklistFile() {
         if (!fs.existsSync(BLACKLIST_FILE)) {
             fs.writeFileSync(
                 BLACKLIST_FILE,
-                JSON.stringify([], null, 2),
+                JSON.stringify(
+                    {
+                        users: [],
+                    },
+                    null,
+                    2
+                ),
                 'utf8'
             );
         }
     } catch (error) {
-        console.error(
+        logger.error(
             'Failed to initialize blacklist file:',
             error
         );
     }
 }
 
-function readBlacklist() {
+function loadBlacklist() {
     ensureBlacklistFile();
 
     try {
-        const data = fs.readFileSync(
-            BLACKLIST_FILE,
-            'utf8'
-        );
+        const raw =
+            fs.readFileSync(
+                BLACKLIST_FILE,
+                'utf8'
+            );
 
-        const parsed = JSON.parse(data);
+        const data =
+            JSON.parse(raw);
 
-        if (!Array.isArray(parsed)) {
+        if (
+            !data ||
+            !Array.isArray(data.users)
+        ) {
             return [];
         }
 
-        return parsed.map(String);
+        return [
+            ...new Set(
+                data.users.map(
+                    String
+                )
+            ),
+        ];
     } catch (error) {
-        console.error(
-            'Failed to read blacklist:',
+        logger.error(
+            'Failed to load blacklist:',
             error
         );
 
@@ -57,14 +76,22 @@ function readBlacklist() {
     }
 }
 
-function saveBlacklist(blacklist) {
-    ensureBlacklistFile();
-
+function saveBlacklist(users) {
     try {
+        ensureBlacklistFile();
+
         fs.writeFileSync(
             BLACKLIST_FILE,
             JSON.stringify(
-                [...new Set(blacklist.map(String))],
+                {
+                    users: [
+                        ...new Set(
+                            users.map(
+                                String
+                            )
+                        ),
+                    ],
+                },
                 null,
                 2
             ),
@@ -73,7 +100,7 @@ function saveBlacklist(blacklist) {
 
         return true;
     } catch (error) {
-        console.error(
+        logger.error(
             'Failed to save blacklist:',
             error
         );
@@ -82,87 +109,47 @@ function saveBlacklist(blacklist) {
     }
 }
 
-/**
- * Check whether a user is blacklisted.
- */
 export function isBlacklisted(userId) {
     if (!userId) {
         return false;
     }
 
-    const blacklist = readBlacklist();
+    const users =
+        loadBlacklist();
 
-    return blacklist.includes(
+    return users.includes(
         String(userId)
     );
 }
 
-/**
- * Add a user to the blacklist.
- */
 export function blacklistUser(userId) {
     if (!userId) {
         return false;
     }
 
     const normalizedId =
-        String(userId);
-
-    const blacklist =
-        readBlacklist();
+        String(userId).trim();
 
     if (
-        blacklist.includes(
+        isBlacklisted(
             normalizedId
         )
     ) {
         return false;
     }
 
-    blacklist.push(
+    const users =
+        loadBlacklist();
+
+    users.push(
         normalizedId
     );
 
     return saveBlacklist(
-        blacklist
+        users
     );
 }
 
-/**
- * Remove a user from the blacklist.
- */
-export function unblacklistUser(userId) {
-    if (!userId) {
-        return false;
-    }
-
-    const normalizedId =
-        String(userId);
-
-    const blacklist =
-        readBlacklist();
-
-    const filtered =
-        blacklist.filter(
-            id =>
-                id !== normalizedId
-        );
-
-    if (
-        filtered.length ===
-        blacklist.length
-    ) {
-        return false;
-    }
-
-    return saveBlacklist(
-        filtered
-    );
-}
-
-/**
- * Get every blacklisted user ID.
- */
 export function getBlacklistedUsers() {
-    return readBlacklist();
+    return loadBlacklist();
 }

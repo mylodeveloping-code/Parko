@@ -2,14 +2,18 @@ import {
     SlashCommandBuilder,
     PermissionFlagsBits,
 } from 'discord.js';
+
 import { successEmbed } from '../../utils/embeds.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
+
 import {
     isBlacklisted,
 } from '../../utils/blacklist.js';
+
 import {
     unblacklistUser,
 } from '../../utils/unblacklist.js';
+
 import {
     TitanBotError,
     ErrorTypes,
@@ -18,11 +22,15 @@ import {
 export default {
     data: new SlashCommandBuilder()
         .setName('unbl')
-        .setDescription('Remove a user from the bot blacklist')
+        .setDescription(
+            'Remove a user from the bot blacklist'
+        )
         .addStringOption((option) =>
             option
                 .setName('user_id')
-                .setDescription('The Discord user ID to unblacklist')
+                .setDescription(
+                    'The Discord user ID to unblacklist'
+                )
                 .setRequired(true)
         )
         .setDefaultMemberPermissions(
@@ -31,11 +39,15 @@ export default {
 
     category: 'moderation',
 
-    async execute(interaction, config, client) {
+    async execute(
+        interaction,
+        config,
+        client
+    ) {
         const userId =
-            interaction.options.getString(
-                'user_id'
-            )?.trim();
+            interaction.options
+                .getString('user_id')
+                ?.trim();
 
         if (!userId) {
             throw new TitanBotError(
@@ -53,9 +65,7 @@ export default {
             );
         }
 
-        if (
-            !isBlacklisted(userId)
-        ) {
+        if (!isBlacklisted(userId)) {
             throw new TitanBotError(
                 'User not blacklisted',
                 ErrorTypes.VALIDATION,
@@ -63,10 +73,10 @@ export default {
             );
         }
 
-        const success =
+        const removed =
             unblacklistUser(userId);
 
-        if (!success) {
+        if (!removed) {
             throw new TitanBotError(
                 'Unblacklist failed',
                 ErrorTypes.INTERNAL,
@@ -86,7 +96,7 @@ export default {
             userText =
                 `**${user.tag}** (\`${userId}\`)`;
         } catch {
-            // User may not be fetchable.
+            // User does not need to be fetchable.
         }
 
         await InteractionHelper.universalReply(
@@ -95,7 +105,7 @@ export default {
                 embeds: [
                     successEmbed(
                         '✅ User Unblacklisted',
-                        `${userText} can now use commands from this bot again.`
+                        `${userText} has been removed from the blacklist and can use commands from this bot again.`
                     ),
                 ],
             }
