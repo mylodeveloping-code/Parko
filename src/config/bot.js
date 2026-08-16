@@ -6,7 +6,7 @@ export const botConfig = {
     activities: [
       {
         name: "Custom Status",
-        state: 'Command prefix: "."',
+        state: "Uhhhh...",
         type: 4,
       },
     ],
