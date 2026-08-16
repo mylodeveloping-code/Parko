@@ -15,7 +15,6 @@ import {
   ErrorTypes,
   ErrorCodes,
 } from '../utils/errorHandler.js';
-import { InteractionHelper } from '../utils/interactionHelper.js';
 import {
   createInteractionTraceContext,
   runWithTraceContext,
@@ -38,8 +37,13 @@ import { isBlacklisted } from '../utils/blacklist.js';
 
 const PB_ACCESS_ROLE_ID = '1537847398746030100';
 
-// Commands that blacklisted users are still allowed to use.
-// These are needed so moderators can remove the blacklist.
+// ============================================================
+// BLACKLIST CONFIGURATION
+// ============================================================
+
+// ONLY this user can use /bl, /unbl, .bl, and .unbl.
+const BLACKLIST_OWNER_ID = '1171948174190067737';
+
 const BLACKLIST_MANAGEMENT_COMMANDS = new Set([
   'bl',
   'unbl',
@@ -81,11 +85,37 @@ async function handleBlacklistedUser(interaction) {
     description:
       'You are currently **blacklisted from using this bot**.\n\n' +
       'You do not have permission to use any of the bot\'s commands while you are blacklisted.\n\n' +
-      'If you believe this was a mistake, please contact a server administrator.',
+      'If you believe this was done in error, please contact the bot owner.',
     color: 0xff0000,
   };
 
-  // Send the user a private DM as well.
+  // IMPORTANT:
+  // Acknowledge the interaction FIRST.
+  //
+  // Previously the bot attempted to DM the user before replying
+  // to the interaction. If the DM took too long, Discord expired
+  // the interaction and showed "Something went wrong".
+  //
+  // This response is ephemeral, meaning only the blacklisted
+  // user can see it.
+  try {
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({
+        embeds: [embed],
+        ephemeral: true,
+      });
+    }
+  } catch (error) {
+    logger.error(
+      `Could not send blacklist interaction response to ${interaction.user.tag}:`,
+      error
+    );
+
+    return;
+  }
+
+  // Also attempt to DM the user, but ONLY after the interaction
+  // has already been acknowledged.
   try {
     await interaction.user.send({
       embeds: [embed],
@@ -96,8 +126,24 @@ async function handleBlacklistedUser(interaction) {
       error
     );
   }
+}
 
-  // Acknowledge the interaction with a private/ephemeral response.
+// ============================================================
+// UNAUTHORIZED BLACKLIST COMMAND RESPONSE
+// ============================================================
+
+async function handleUnauthorizedBlacklistCommand(interaction) {
+  const commandName =
+    interaction.commandName?.toLowerCase();
+
+  const embed = {
+    title: '⛔ Permission Denied',
+    description:
+      `You do not have permission to use \`/${commandName}\`.\n\n` +
+      'Only the bot owner can blacklist or unblacklist users.',
+    color: 0xff0000,
+  };
+
   try {
     if (!interaction.replied && !interaction.deferred) {
       await interaction.reply({
@@ -106,8 +152,8 @@ async function handleBlacklistedUser(interaction) {
       });
     }
   } catch (error) {
-    logger.debug(
-      `Could not send blacklist response to ${interaction.user.tag}.`,
+    logger.error(
+      `Could not send unauthorized blacklist response to ${interaction.user.tag}:`,
       error
     );
   }
@@ -163,13 +209,39 @@ export default {
                 }
               );
 
-              // ==================================================
-              // BLACKLIST CHECK
-              // ==================================================
-
               const commandName =
                 interaction.commandName
                   ?.toLowerCase();
+
+              // ==================================================
+              // BLACKLIST MANAGEMENT PERMISSION
+              // ==================================================
+
+              // /bl and /unbl are ONLY usable by the bot owner.
+              if (
+                BLACKLIST_MANAGEMENT_COMMANDS.has(
+                  commandName
+                )
+              ) {
+                if (
+                  interaction.user.id !==
+                  BLACKLIST_OWNER_ID
+                ) {
+                  logger.warn(
+                    `Unauthorized blacklist command attempt: ${interaction.user.tag} (${interaction.user.id}) attempted /${commandName}.`
+                  );
+
+                  await handleUnauthorizedBlacklistCommand(
+                    interaction
+                  );
+
+                  return;
+                }
+              }
+
+              // ==================================================
+              // BLACKLIST CHECK
+              // ==================================================
 
               if (
                 isBlacklisted(
@@ -510,8 +582,6 @@ export default {
           else if (
             interaction.isAutocomplete()
           ) {
-            // Blacklisted users should not receive
-            // autocomplete results.
             if (
               isBlacklisted(
                 interaction.user.id
@@ -630,9 +700,7 @@ export default {
                   .respond([])
                   .catch(() => {});
               }
-            }
-
-            else if (
+            } else if (
               interaction.commandName ===
                 'app-admin' &&
               focusedOption.name ===
@@ -698,9 +766,7 @@ export default {
                   .respond([])
                   .catch(() => {});
               }
-            }
-
-            else if (
+            } else if (
               interaction.commandName ===
                 'reactroles' &&
               focusedOption.name ===
@@ -882,6 +948,19 @@ export default {
           else if (
             interaction.isButton()
           ) {
+            // Blacklisted users cannot use buttons either.
+            if (
+              isBlacklisted(
+                interaction.user.id
+              )
+            ) {
+              await handleBlacklistedUser(
+                interaction
+              );
+
+              return;
+            }
+
             if (
               interaction.customId.startsWith(
                 'shared_todo_'
@@ -1014,6 +1093,18 @@ export default {
           else if (
             interaction.isStringSelectMenu()
           ) {
+            if (
+              isBlacklisted(
+                interaction.user.id
+              )
+            ) {
+              await handleBlacklistedUser(
+                interaction
+              );
+
+              return;
+            }
+
             const [
               customId,
               ...args
