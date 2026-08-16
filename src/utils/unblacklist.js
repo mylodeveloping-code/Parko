@@ -75,9 +75,7 @@ export default {
             return;
         }
 
-        if (
-            !isBlacklisted(userId)
-        ) {
+        if (!isBlacklisted(userId)) {
             await interaction.reply(
                 `<@${userId}> is not currently blacklisted.`
             );
@@ -86,9 +84,7 @@ export default {
         }
 
         const removed =
-            removeFromBlacklist(
-                userId
-            );
+            removeFromBlacklist(userId);
 
         if (!removed) {
             await interaction.reply(
