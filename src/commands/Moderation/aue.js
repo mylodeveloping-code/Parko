@@ -3,20 +3,20 @@ import {
   PermissionFlagsBits,
 } from 'discord.js';
 
-import { createEmbed } from '../../utils/embeds.js';
+import { successEmbed } from '../../utils/embeds.js';
 import { logger } from '../../utils/logger.js';
-import { logEvent } from '../../utils/moderation.js';
+import { replyUserError, ErrorTypes } from '../../utils/errorHandler.js';
 
 const AUE_ROLE_ID = '1537848681728835635';
 
 export default {
   data: new SlashCommandBuilder()
     .setName('aue')
-    .setDescription('Give a user the AU Exempt role.')
+    .setDescription('Toggle AU Exempt for a user')
     .addUserOption((option) =>
       option
         .setName('user')
-        .setDescription('The user to give AU Exempt to.')
+        .setDescription('The user to toggle AU Exempt for')
         .setRequired(true)
     )
     .setDefaultMemberPermissions(
@@ -25,135 +25,162 @@ export default {
 
   category: 'moderation',
 
-  abuseProtection: {
-    maxAttempts: 10,
-    windowMs: 60_000,
-  },
+  async execute(interaction) {
+    const user =
+      interaction.options.getUser('user');
 
-  async execute(interaction, config, client) {
+    const member =
+      await interaction.guild.members
+        .fetch(user.id)
+        .catch(() => null);
+
+    if (!member) {
+      return replyUserError(interaction, {
+        type: ErrorTypes.NOT_FOUND,
+        message: 'That user is not in this server.',
+      });
+    }
+
+    const role =
+      interaction.guild.roles.cache.get(AUE_ROLE_ID);
+
+    if (!role) {
+      return replyUserError(interaction, {
+        type: ErrorTypes.UNKNOWN,
+        message: 'The AU Exempt role could not be found.',
+      });
+    }
+
+    if (!role.editable) {
+      return replyUserError(interaction, {
+        type: ErrorTypes.PERMISSION,
+        message:
+          'I cannot manage the AU Exempt role. Make sure my highest role is above it.',
+      });
+    }
+
     try {
-      const user =
-        interaction.options.getUser('user');
+      const hasRole =
+        member.roles.cache.has(AUE_ROLE_ID);
 
-      const member =
-        await interaction.guild.members
-          .fetch(user.id)
-          .catch(() => null);
-
-      if (!member) {
-        return interaction.reply({
-          embeds: [
-            createEmbed({
-              title: 'User Not Found',
-              description:
-                'That user is not currently in this server.',
-              color: 'error',
-            }),
-          ],
-        });
-      }
-
-      const role =
-        interaction.guild.roles.cache.get(
-          AUE_ROLE_ID
+      if (hasRole) {
+        await member.roles.remove(
+          role,
+          `AU Exempt removed by ${interaction.user.tag}`
         );
 
-      if (!role) {
-        logger.error(
-          `AU Exempt role ${AUE_ROLE_ID} was not found in guild ${interaction.guild.id}.`
+        await interaction.reply({
+          embeds: [
+            successEmbed(
+              'AU Exempt Removed',
+              `Removed the **AU Exempt** role from ${member}.`
+            ),
+          ],
+        });
+
+        logger.info(
+          `Removed AU Exempt from ${member.user.tag} (${member.id}) by ${interaction.user.tag}`
+        );
+      } else {
+        await member.roles.add(
+          role,
+          `AU Exempt granted by ${interaction.user.tag}`
         );
 
-        return interaction.reply({
+        await interaction.reply({
           embeds: [
-            createEmbed({
-              title: 'Role Not Found',
-              description:
-                'The AU Exempt role could not be found.',
-              color: 'error',
-            }),
+            successEmbed(
+              'AU Exempt Granted',
+              `Gave **AU Exempt** to ${member}.`
+            ),
           ],
         });
+
+        logger.info(
+          `Granted AU Exempt to ${member.user.tag} (${member.id}) by ${interaction.user.tag}`
+        );
       }
-
-      if (!role.editable) {
-        return interaction.reply({
-          embeds: [
-            createEmbed({
-              title: 'Cannot Give Role',
-              description:
-                'I cannot manage the AU Exempt role. Make sure my bot role is above it.',
-              color: 'error',
-            }),
-          ],
-        });
-      }
-
-      if (member.roles.cache.has(AUE_ROLE_ID)) {
-        return interaction.reply({
-          embeds: [
-            createEmbed({
-              title: 'Already Exempt',
-              description:
-                `${user} already has the **AU Exempt** role.`,
-              color: 'info',
-            }),
-          ],
-        });
-      }
-
-      await member.roles.add(
-        role,
-        `AU Exempt granted by ${interaction.user.tag}`
-      );
-
-      await logEvent({
-        client,
-        guild: interaction.guild,
-        event: {
-          action: 'AU Exempt Granted',
-          target:
-            `${user.tag} (${user.id})`,
-          executor:
-            `${interaction.user.tag} (${interaction.user.id})`,
-          reason:
-            'AU Exempt role granted.',
-          metadata: {
-            userId: user.id,
-            moderatorId:
-              interaction.user.id,
-            roleId: AUE_ROLE_ID,
-            roleName: 'AU Exempt',
-          },
-        },
-      });
-
-      return interaction.reply({
-        embeds: [
-          createEmbed({
-            title: 'AU Exempt Granted',
-            description:
-              `${user} has been given the **AU Exempt** role.\n\n` +
-              'They are now exempt from normal moderation actions, while your existing automoderation rules for AU Exempt users remain in effect.',
-            color: 'success',
-          }),
-        ],
-      });
     } catch (error) {
       logger.error(
-        'AU Exempt command error:',
+        'Error toggling AU Exempt:',
         error
       );
 
-      return interaction.reply({
-        embeds: [
-          createEmbed({
-            title: 'Error',
-            description:
-              'An unexpected error occurred while giving AU Exempt.',
-            color: 'error',
-          }),
-        ],
-      }).catch(() => {});
+      return replyUserError(interaction, {
+        type: ErrorTypes.UNKNOWN,
+        message:
+          'I could not change the AU Exempt role.',
+      });
+    }
+  },
+
+  async messageExecute(message, args) {
+    if (!message?.guild) {
+      return;
+    }
+
+    if (
+      !message.member?.permissions.has(
+        PermissionFlagsBits.ManageRoles
+      )
+    ) {
+      return;
+    }
+
+    const userId = args?.[0]?.replace(/[<@!>]/g, '');
+
+    if (!userId || !/^\d+$/.test(userId)) {
+      return;
+    }
+
+    const member =
+      await message.guild.members
+        .fetch(userId)
+        .catch(() => null);
+
+    if (!member) {
+      return;
+    }
+
+    const role =
+      message.guild.roles.cache.get(AUE_ROLE_ID);
+
+    if (!role || !role.editable) {
+      return;
+    }
+
+    try {
+      const hasRole =
+        member.roles.cache.has(AUE_ROLE_ID);
+
+      if (hasRole) {
+        await member.roles.remove(
+          role,
+          `AU Exempt removed by ${message.author.tag}`
+        );
+
+        await message.react('👍').catch(() => {});
+
+        logger.info(
+          `Removed AU Exempt from ${member.user.tag} (${member.id}) by ${message.author.tag}`
+        );
+      } else {
+        await member.roles.add(
+          role,
+          `AU Exempt granted by ${message.author.tag}`
+        );
+
+        await message.react('👍').catch(() => {});
+
+        logger.info(
+          `Granted AU Exempt to ${member.user.tag} (${member.id}) by ${message.author.tag}`
+        );
+      }
+    } catch (error) {
+      logger.error(
+        'Error toggling AU Exempt:',
+        error
+      );
     }
   },
 };
