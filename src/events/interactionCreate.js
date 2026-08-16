@@ -117,11 +117,11 @@ async function respondToBlacklistedUser(interaction) {
         ) {
             await interaction.reply({
                 embeds: [embed],
-                ephemeral: true,
+                flags: MessageFlags.Ephemeral,
             });
 
             logger.info(
-                `Sent blacklist response to ${interaction.user.tag} (${interaction.user.id}).`
+                `Sent blacklist response to ${interaction.user.tag} (${interaction.user.id}).`,
             );
 
             return true;
@@ -136,7 +136,7 @@ async function respondToBlacklistedUser(interaction) {
             });
 
             logger.info(
-                `Edited deferred blacklist response for ${interaction.user.tag} (${interaction.user.id}).`
+                `Edited deferred blacklist response for ${interaction.user.tag} (${interaction.user.id}).`,
             );
 
             return true;
@@ -145,7 +145,7 @@ async function respondToBlacklistedUser(interaction) {
         if (interaction.replied) {
             await interaction.followUp({
                 embeds: [embed],
-                ephemeral: true,
+                flags: MessageFlags.Ephemeral,
             });
 
             return true;
@@ -153,7 +153,7 @@ async function respondToBlacklistedUser(interaction) {
     } catch (error) {
         logger.error(
             `Failed to respond to blacklisted user ${interaction.user.tag} (${interaction.user.id}):`,
-            error
+            error,
         );
     }
 
@@ -161,19 +161,15 @@ async function respondToBlacklistedUser(interaction) {
 }
 
 // ============================================================
-// IMMEDIATE MUSIC ACK
+// IMMEDIATE MUSIC DEFER
 // ============================================================
 
-async function immediatelyAcknowledgeMusicInteraction(
-    interaction,
-) {
+async function immediatelyDeferPlayInteraction(interaction) {
     if (
         !interaction?.isChatInputCommand?.() ||
-        String(
-            interaction.commandName || '',
-        ).toLowerCase() !== 'play'
+        interaction.commandName !== 'play'
     ) {
-        return true;
+        return false;
     }
 
     if (
@@ -183,31 +179,42 @@ async function immediatelyAcknowledgeMusicInteraction(
         return true;
     }
 
-    const startedAt = Date.now();
+    const start = Date.now();
+
+    console.log(
+        `[INTERACTION DEBUG] Received /play | ID: ${interaction.id}`,
+    );
+
+    console.log(
+        `[INTERACTION DEBUG] Attempting immediate defer for /play...`,
+    );
 
     try {
-        logger.info(
-            `🎵 /play received. Sending immediate Discord acknowledgement for interaction ${interaction.id}.`
-        );
-
         await interaction.deferReply({
             flags: MessageFlags.Ephemeral,
         });
 
-        const elapsed =
-            Date.now() - startedAt;
+        const elapsed = Date.now() - start;
+
+        console.log(
+            `[INTERACTION DEBUG] /play successfully deferred in ${elapsed}ms.`,
+        );
 
         logger.info(
-            `🎵 /play interaction ${interaction.id} acknowledged successfully in ${elapsed}ms.`
+            `[Music] /play interaction deferred immediately in ${elapsed}ms.`,
         );
 
         return true;
     } catch (error) {
-        const elapsed =
-            Date.now() - startedAt;
+        const elapsed = Date.now() - start;
+
+        console.error(
+            `[INTERACTION DEBUG] /play DEFER FAILED after ${elapsed}ms:`,
+            error,
+        );
 
         logger.error(
-            `❌ Failed to acknowledge /play interaction ${interaction.id} after ${elapsed}ms:`,
+            `[Music] Failed to immediately defer /play after ${elapsed}ms:`,
             error,
         );
 
@@ -233,6 +240,18 @@ export default {
             interactionTraceContext.traceId;
 
         // ========================================================
+        // IMMEDIATELY ACKNOWLEDGE /PLAY
+        //
+        // This MUST happen before blacklist checks, guild config,
+        // abuse protection, permissions, command access, etc.
+        // ========================================================
+
+        const playWasDeferred =
+            await immediatelyDeferPlayInteraction(
+                interaction,
+            );
+
+        // ========================================================
         // BLACKLIST
         // ========================================================
 
@@ -244,11 +263,11 @@ export default {
                 interaction.isChatInputCommand()
             ) {
                 logger.info(
-                    `Blocked blacklisted user ${interaction.user.tag} (${interaction.user.id}) from using /${interaction.commandName}.`
+                    `Blocked blacklisted user ${interaction.user.tag} (${interaction.user.id}) from using /${interaction.commandName}.`,
                 );
 
                 await respondToBlacklistedUser(
-                    interaction
+                    interaction,
                 );
 
                 return;
@@ -261,48 +280,11 @@ export default {
                 interaction.isModalSubmit()
             ) {
                 await respondToBlacklistedUser(
-                    interaction
+                    interaction,
                 );
 
                 return;
             }
-        }
-
-        // ========================================================
-        // IMMEDIATELY ACKNOWLEDGE /PLAY
-        // ========================================================
-        //
-        // This MUST happen before:
-        //
-        // - InteractionHelper.patchInteractionResponses()
-        // - ResponseCoordinator.attach()
-        // - command lookup
-        // - command validation
-        // - cooldown checks
-        // - abuse protection
-        // - guild config
-        // - permission checks
-        //
-        // This gives Discord the acknowledgement as early as
-        // possible after InteractionCreate fires.
-        //
-        const musicAcknowledged =
-            await immediatelyAcknowledgeMusicInteraction(
-                interaction,
-            );
-
-        if (
-            interaction.isChatInputCommand() &&
-            String(
-                interaction.commandName || '',
-            ).toLowerCase() === 'play' &&
-            !musicAcknowledged
-        ) {
-            logger.error(
-                `❌ /play interaction ${interaction.id} could not be acknowledged. Stopping execution.`,
-            );
-
-            return;
         }
 
         // ========================================================
@@ -312,7 +294,7 @@ export default {
         if (
             interaction.isChatInputCommand() &&
             BLACKLIST_MANAGEMENT_COMMANDS.has(
-                interaction.commandName?.toLowerCase()
+                interaction.commandName?.toLowerCase(),
             ) &&
             interaction.user.id !==
                 BLACKLIST_OWNER_ID
@@ -328,12 +310,12 @@ export default {
                             color: 0xff0000,
                         },
                     ],
-                    ephemeral: true,
+                    flags: MessageFlags.Ephemeral,
                 });
             } catch (error) {
                 logger.error(
                     'Failed to send blacklist permission response:',
-                    error
+                    error,
                 );
             }
 
@@ -353,11 +335,11 @@ export default {
                     // ==================================================
 
                     InteractionHelper.patchInteractionResponses(
-                        interaction
+                        interaction,
                     );
 
                     ResponseCoordinator.attach(
-                        interaction
+                        interaction,
                     );
 
                     // ==================================================
@@ -370,12 +352,25 @@ export default {
                         const commandName =
                             String(
                                 interaction.commandName ||
-                                ''
+                                '',
                             ).toLowerCase();
 
                         logger.info(
-                            `📥 Received slash command /${commandName} from ${interaction.user?.tag || interaction.user?.id}.`
+                            `📥 Received slash command /${commandName} from ${interaction.user?.tag || interaction.user?.id}.`,
                         );
+
+                        // ==================================================
+                        // /PLAY WAS ALREADY ACKNOWLEDGED
+                        // ==================================================
+
+                        if (
+                            commandName === 'play' &&
+                            playWasDeferred
+                        ) {
+                            logger.info(
+                                `[Music] /play already acknowledged before command checks.`,
+                            );
+                        }
 
                         // ==================================================
                         // FIND COMMAND
@@ -383,22 +378,22 @@ export default {
 
                         const command =
                             client.commands?.get(
-                                commandName
+                                commandName,
                             );
 
                         if (!command) {
                             logger.error(
-                                `❌ Command /${commandName} was received by Discord but was NOT found in client.commands.`
+                                `❌ Command /${commandName} was received by Discord but was NOT found in client.commands.`,
                             );
 
                             logger.error(
                                 `Loaded commands: ${
                                     client.commands
-                                        ? [...client.commands.keys()].join(
-                                              ', '
-                                          )
+                                        ? [
+                                              ...client.commands.keys(),
+                                          ].join(', ')
                                         : 'client.commands is missing'
-                                }`
+                                }`,
                             );
 
                             throw createError(
@@ -409,8 +404,8 @@ export default {
                                     {
                                         commandName,
                                     },
-                                    interactionTraceContext
-                                )
+                                    interactionTraceContext,
+                                ),
                             );
                         }
 
@@ -419,7 +414,7 @@ export default {
                             'function'
                         ) {
                             logger.error(
-                                `❌ Command /${commandName} exists, but command.execute is not a function.`
+                                `❌ Command /${commandName} exists, but command.execute is not a function.`,
                             );
 
                             throw createError(
@@ -430,13 +425,13 @@ export default {
                                     {
                                         commandName,
                                     },
-                                    interactionTraceContext
-                                )
+                                    interactionTraceContext,
+                                ),
                             );
                         }
 
                         logger.info(
-                            `✅ Found command /${commandName}. Beginning execution.`
+                            `✅ Found command /${commandName}. Beginning execution.`,
                         );
 
                         // ==================================================
@@ -451,8 +446,8 @@ export default {
                                         'command_input_validation',
                                     commandName,
                                 },
-                                interactionTraceContext
-                            )
+                                interactionTraceContext,
+                            ),
                         );
 
                         // ==================================================
@@ -463,21 +458,21 @@ export default {
                             botConfig &&
                             isMaintenanceModeSafe() &&
                             !isBotOwner(
-                                interaction.user.id
+                                interaction.user.id,
                             )
                         ) {
                             throw createError(
                                 'Bot is in maintenance mode',
                                 ErrorTypes.CONFIGURATION,
                                 getBotMessage(
-                                    'maintenanceMode'
+                                    'maintenanceMode',
                                 ),
                                 withTraceContext(
                                     {
                                         commandName,
                                     },
-                                    interactionTraceContext
-                                )
+                                    interactionTraceContext,
+                                ),
                             );
                         }
 
@@ -487,14 +482,14 @@ export default {
 
                         if (
                             !isCommandCategoryEnabled(
-                                command.category
+                                command.category,
                             )
                         ) {
                             throw createError(
                                 `Feature disabled for category ${command.category}`,
                                 ErrorTypes.CONFIGURATION,
                                 getBotMessage(
-                                    'commandDisabled'
+                                    'commandDisabled',
                                 ),
                                 withTraceContext(
                                     {
@@ -502,8 +497,8 @@ export default {
                                         category:
                                             command.category,
                                     },
-                                    interactionTraceContext
-                                )
+                                    interactionTraceContext,
+                                ),
                             );
                         }
 
@@ -514,13 +509,13 @@ export default {
                         const defaultCooldownSec =
                             Number(
                                 botConfig.commands
-                                    ?.defaultCooldown
+                                    ?.defaultCooldown,
                             ) || 0;
 
                         if (
                             defaultCooldownSec > 0 &&
                             !isBotOwner(
-                                interaction.user.id
+                                interaction.user.id,
                             )
                         ) {
                             const cooldownKey =
@@ -528,7 +523,7 @@ export default {
 
                             const expiresAt =
                                 client.cooldowns?.get(
-                                    cooldownKey
+                                    cooldownKey,
                                 );
 
                             if (
@@ -539,7 +534,7 @@ export default {
                                     Math.ceil(
                                         (expiresAt -
                                             Date.now()) /
-                                            1000
+                                            1000,
                                     );
 
                                 throw createError(
@@ -549,15 +544,15 @@ export default {
                                         'cooldownActive',
                                         {
                                             time: `${remainingSec}s`,
-                                        }
+                                        },
                                     ),
                                     withTraceContext(
                                         {
                                             commandName,
                                             remainingSec,
                                         },
-                                        interactionTraceContext
-                                    )
+                                        interactionTraceContext,
+                                    ),
                                 );
                             }
 
@@ -565,7 +560,7 @@ export default {
                                 cooldownKey,
                                 Date.now() +
                                     defaultCooldownSec *
-                                        1000
+                                        1000,
                             );
                         }
 
@@ -577,7 +572,7 @@ export default {
                             await enforceAbuseProtection(
                                 interaction,
                                 command,
-                                commandName
+                                commandName,
                             );
 
                         if (
@@ -585,7 +580,7 @@ export default {
                         ) {
                             const formattedCooldown =
                                 formatCooldownDuration(
-                                    abuseProtection.remainingMs
+                                    abuseProtection.remainingMs,
                                 );
 
                             throw createError(
@@ -607,8 +602,8 @@ export default {
                                             abuseProtection.policy
                                                 ?.maxAttempts,
                                     },
-                                    interactionTraceContext
-                                )
+                                    interactionTraceContext,
+                                ),
                             );
                         }
 
@@ -623,12 +618,12 @@ export default {
                                 await getGuildConfig(
                                     client,
                                     interaction.guild.id,
-                                    interactionTraceContext
+                                    interactionTraceContext,
                                 );
 
                             const accessKey =
                                 resolveSlashAccessKey(
-                                    interaction
+                                    interaction,
                                 );
 
                             const enabled =
@@ -636,7 +631,7 @@ export default {
                                     client,
                                     interaction.guild.id,
                                     accessKey,
-                                    command.category
+                                    command.category,
                                 );
 
                             if (!enabled) {
@@ -651,8 +646,8 @@ export default {
                                             guildId:
                                                 interaction.guild.id,
                                         },
-                                        interactionTraceContext
-                                    )
+                                        interactionTraceContext,
+                                    ),
                                 );
                             }
                         }
@@ -663,12 +658,12 @@ export default {
 
                         const hasPBAccess =
                             interaction.member?.roles?.cache?.has(
-                                PB_ACCESS_ROLE_ID
+                                PB_ACCESS_ROLE_ID,
                             ) ?? false;
 
                         if (hasPBAccess) {
                             logger.info(
-                                `PB Access permission override: ${interaction.user.tag} used /${commandName}`
+                                `PB Access permission override: ${interaction.user.tag} used /${commandName}`,
                             );
                         } else {
                             const permissionAllowed =
@@ -679,7 +674,7 @@ export default {
                                         source:
                                             'interactionCreate',
                                         guildConfig,
-                                    }
+                                    },
                                 );
 
                             if (!permissionAllowed) {
@@ -692,17 +687,17 @@ export default {
                         // ==================================================
 
                         logger.info(
-                            `▶️ Executing /${commandName}...`
+                            `▶️ Executing /${commandName}...`,
                         );
 
                         await command.execute(
                             interaction,
                             guildConfig,
-                            client
+                            client,
                         );
 
                         logger.info(
-                            `✅ Finished executing /${commandName}.`
+                            `✅ Finished executing /${commandName}.`,
                         );
 
                         return;
@@ -719,8 +714,8 @@ export default {
                             client.commands?.get(
                                 String(
                                     interaction.commandName ||
-                                        ''
-                                ).toLowerCase()
+                                        '',
+                                ).toLowerCase(),
                             );
 
                         if (
@@ -729,12 +724,12 @@ export default {
                             try {
                                 await command.autocomplete(
                                     interaction,
-                                    client
+                                    client,
                                 );
                             } catch (error) {
                                 logger.error(
                                     'Error handling command autocomplete:',
-                                    error
+                                    error,
                                 );
 
                                 await interaction
@@ -761,12 +756,12 @@ export default {
                     ) {
                         if (
                             interaction.customId.startsWith(
-                                'shared_todo_'
+                                'shared_todo_',
                             )
                         ) {
                             const parts =
                                 interaction.customId.split(
-                                    '_'
+                                    '_',
                                 );
 
                             const buttonType =
@@ -779,14 +774,14 @@ export default {
 
                             const button =
                                 client.buttons?.get(
-                                    buttonType
+                                    buttonType,
                                 );
 
                             if (button) {
                                 await button.execute(
                                     interaction,
                                     client,
-                                    [listId]
+                                    [listId],
                                 );
                             }
 
@@ -798,21 +793,21 @@ export default {
                             ...args
                         ] =
                             interaction.customId.split(
-                                ':'
+                                ':',
                             );
 
                         const button =
                             client.buttons?.get(
-                                customId
+                                customId,
                             );
 
                         if (!button) {
                             if (
                                 !interaction.customId.includes(
-                                    ':'
+                                    ':',
                                 ) ||
                                 isCollectorManagedComponent(
-                                    customId
+                                    customId,
                                 )
                             ) {
                                 return;
@@ -826,15 +821,15 @@ export default {
                                     {
                                         customId,
                                     },
-                                    interactionTraceContext
-                                )
+                                    interactionTraceContext,
+                                ),
                             );
                         }
 
                         await button.execute(
                             interaction,
                             client,
-                            args
+                            args,
                         );
 
                         return;
@@ -852,21 +847,21 @@ export default {
                             ...args
                         ] =
                             interaction.customId.split(
-                                ':'
+                                ':',
                             );
 
                         const selectMenu =
                             client.selectMenus?.get(
-                                customId
+                                customId,
                             );
 
                         if (!selectMenu) {
                             if (
                                 !interaction.customId.includes(
-                                    ':'
+                                    ':',
                                 ) ||
                                 isCollectorManagedComponent(
-                                    customId
+                                    customId,
                                 )
                             ) {
                                 return;
@@ -880,15 +875,15 @@ export default {
                                     {
                                         customId,
                                     },
-                                    interactionTraceContext
-                                )
+                                    interactionTraceContext,
+                                ),
                             );
                         }
 
                         await selectMenu.execute(
                             interaction,
                             client,
-                            args
+                            args,
                         );
 
                         return;
@@ -911,7 +906,7 @@ export default {
                         ) {
                             await handleMusicSeekModal(
                                 interaction,
-                                client
+                                client,
                             );
 
                             return;
@@ -923,11 +918,11 @@ export default {
 
                         if (
                             interaction.customId.startsWith(
-                                'app_modal_'
+                                'app_modal_',
                             )
                         ) {
                             await handleApplicationModal(
-                                interaction
+                                interaction,
                             );
 
                             return;
@@ -939,19 +934,19 @@ export default {
 
                         if (
                             interaction.customId.startsWith(
-                                'app_review_'
+                                'app_review_',
                             ) ||
                             interaction.customId.startsWith(
-                                'jtc_'
+                                'jtc_',
                             ) ||
                             interaction.customId.startsWith(
-                                'config_wizard_modal:'
+                                'config_wizard_modal:',
                             ) ||
                             interaction.customId.startsWith(
-                                'log_dash_channel_modal:'
+                                'log_dash_channel_modal:',
                             ) ||
                             interaction.customId.startsWith(
-                                'log_dash_filter_modal:'
+                                'log_dash_filter_modal:',
                             )
                         ) {
                             return;
@@ -962,18 +957,18 @@ export default {
                             ...args
                         ] =
                             interaction.customId.split(
-                                ':'
+                                ':',
                             );
 
                         const modal =
                             client.modals?.get(
-                                customId
+                                customId,
                             );
 
                         if (!modal) {
                             if (
                                 !interaction.customId.includes(
-                                    ':'
+                                    ':',
                                 )
                             ) {
                                 return;
@@ -987,15 +982,15 @@ export default {
                                     {
                                         customId,
                                     },
-                                    interactionTraceContext
-                                )
+                                    interactionTraceContext,
+                                ),
                             );
                         }
 
                         await modal.execute(
                             interaction,
                             client,
-                            args
+                            args,
                         );
 
                         return;
@@ -1022,7 +1017,7 @@ export default {
                                 interaction.user?.id,
                             commandName:
                                 interaction.commandName,
-                        }
+                        },
                     );
 
                     try {
@@ -1048,17 +1043,17 @@ export default {
                                     source:
                                         'interactionCreate',
                                 },
-                                interactionTraceContext
-                            )
+                                interactionTraceContext,
+                            ),
                         );
                     } catch (replyError) {
                         logger.error(
                             'Failed to send fallback error response:',
-                            replyError
+                            replyError,
                         );
                     }
                 }
-            }
+            },
         );
     },
 };
