@@ -1,59 +1,81 @@
-import { PermissionFlagsBits } from 'discord.js';
-import {
-    addToBlacklist,
-    removeFromBlacklist,
-    isBlacklisted,
-} from '../../utils/blacklist.js';
+import { SlashCommandBuilder, PermissionFlagsBits } from 'discord.js';
+import { successEmbed } from '../../utils/embeds.js';
+import { InteractionHelper } from '../../utils/interactionHelper.js';
+import { ModerationService } from '../../services/moderation/moderationService.js';
+import { TitanBotError, ErrorTypes } from '../../utils/errorHandler.js';
+import { isModerationExempt } from '../../utils/moderation.js';
 
 export default {
-    name: 'bl',
-    aliases: ['blacklist'],
-    category: 'moderation',
+    data: new SlashCommandBuilder()
+        .setName("ban")
+        .setDescription("Ban a user from the server")
+        .addUserOption((option) =>
+            option
+                .setName("target")
+                .setDescription("The user to ban")
+                .setRequired(true),
+        )
+        .addStringOption((option) =>
+            option.setName("reason").setDescription("Reason for the ban"),
+        )
+        .setDefaultMemberPermissions(PermissionFlagsBits.BanMembers),
 
-    async execute(message, args) {
-        // Only administrators can use .bl
-        if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
-            return message.reply({
-                content: '❌ You do not have permission to use this command.',
-            });
+    category: "moderation",
+
+    async execute(interaction, config, client) {
+        const user = interaction.options.getUser("target");
+        const reason =
+            interaction.options.getString("reason") ||
+            "No reason provided";
+
+        if (!user) {
+            throw new TitanBotError(
+                'Missing target user',
+                ErrorTypes.USER_INPUT,
+                'You must specify a user to ban.',
+                { subtype: 'invalid_user' },
+            );
         }
 
-        const userId = args[0];
-
-        // Check for a user ID
-        if (!userId) {
-            return message.reply({
-                content:
-                    '❌ Please provide a Discord user ID.\n\nExample: `.bl 1335665701444386896`',
-            });
+        // Moderation exemption
+        if (isModerationExempt(user.id)) {
+            throw new TitanBotError(
+                "User is moderation exempt",
+                ErrorTypes.VALIDATION,
+                "This user is exempt from all moderation actions.",
+            );
         }
 
-        // Validate Discord snowflake
-        if (!/^\d{17,20}$/.test(userId)) {
-            return message.reply({
-                content: '❌ That is not a valid Discord user ID.',
-            });
+        if (user.id === interaction.user.id) {
+            throw new TitanBotError(
+                'Cannot ban self',
+                ErrorTypes.VALIDATION,
+                'You cannot ban yourself.',
+            );
         }
 
-        // Prevent blacklisting yourself
-        if (userId === message.author.id) {
-            return message.reply({
-                content: '❌ You cannot blacklist yourself.',
-            });
+        if (user.id === client.user.id) {
+            throw new TitanBotError(
+                'Cannot ban bot',
+                ErrorTypes.VALIDATION,
+                'You cannot ban the bot.',
+            );
         }
 
-        // Check if already blacklisted
-        if (isBlacklisted(userId)) {
-            return message.reply({
-                content: `⚠️ <@${userId}> is already blacklisted.`,
-            });
-        }
+        const result = await ModerationService.banUser({
+            guild: interaction.guild,
+            user,
+            moderator: interaction.member,
+            reason,
+        });
 
-        // Add user to blacklist
-        addToBlacklist(userId);
-
-        return message.reply({
-            content: `✅ <@${userId}> has been blacklisted and can no longer use ${message.client.user.username}.`,
+        await InteractionHelper.universalReply(interaction, {
+            embeds: [
+                successEmbed(
+                    `🚫 **Banned** ${user.tag}`,
+                    `**Reason:** ${reason}\n**Case ID:** #${result.caseId}`,
+                ),
+            ],
         });
     },
 };
