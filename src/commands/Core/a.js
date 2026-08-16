@@ -133,17 +133,6 @@ export default {
                     'Admin Perms role toggled off.'
                 );
 
-                await message.channel.send({
-                    embeds: [
-                        createEmbed({
-                            title: '🛡️ Admin Perms',
-                            description:
-                                'The **Admin Perms** role has been removed from you.',
-                            color: 'warning',
-                        }),
-                    ],
-                });
-
                 return;
             }
 
@@ -151,33 +140,11 @@ export default {
                 ROLE_ID,
                 'Admin Perms role toggled on.'
             );
-
-            await message.channel.send({
-                embeds: [
-                    createEmbed({
-                        title: '🛡️ Admin Perms',
-                        description:
-                            'The **Admin Perms** role has been added to you.',
-                        color: 'success',
-                    }),
-                ],
-            });
         } catch (error) {
             console.error(
                 'Prefix Admin Perms command error:',
                 error
             );
-
-            await message.channel.send({
-                embeds: [
-                    createEmbed({
-                        title: '❌ Error',
-                        description:
-                            'I could not toggle the Admin Perms role. Make sure my bot role is above the role I am trying to manage.',
-                        color: 'error',
-                    }),
-                ],
-            }).catch(() => {});
         }
     },
 };
