@@ -7,7 +7,6 @@ const __dirname = path.dirname(__filename);
 
 const blacklistFile = path.join(__dirname, '../../data/blacklist.json');
 
-// Make sure the data directory/file exists
 const dataDir = path.dirname(blacklistFile);
 
 if (!fs.existsSync(dataDir)) {
@@ -15,42 +14,55 @@ if (!fs.existsSync(dataDir)) {
 }
 
 if (!fs.existsSync(blacklistFile)) {
-  fs.writeFileSync(blacklistFile, JSON.stringify([], null, 2));
+  fs.writeFileSync(blacklistFile, '[]', 'utf8');
 }
 
 function loadBlacklist() {
   try {
-    return JSON.parse(fs.readFileSync(blacklistFile, 'utf8'));
-  } catch {
+    const data = fs.readFileSync(blacklistFile, 'utf8');
+    const blacklist = JSON.parse(data);
+
+    return Array.isArray(blacklist) ? blacklist : [];
+  } catch (error) {
+    console.error('Failed to load blacklist:', error);
     return [];
   }
 }
 
 function saveBlacklist(blacklist) {
-  fs.writeFileSync(
-    blacklistFile,
-    JSON.stringify(blacklist, null, 2)
-  );
+  try {
+    fs.writeFileSync(
+      blacklistFile,
+      JSON.stringify(blacklist, null, 2),
+      'utf8'
+    );
+  } catch (error) {
+    console.error('Failed to save blacklist:', error);
+  }
 }
 
 export function isBlacklisted(userId) {
-  const blacklist = loadBlacklist();
-  return blacklist.includes(userId);
+  return loadBlacklist().includes(String(userId));
 }
 
 export function addToBlacklist(userId) {
+  userId = String(userId);
+
   const blacklist = loadBlacklist();
 
-  if (!blacklist.includes(userId)) {
-    blacklist.push(userId);
-    saveBlacklist(blacklist);
-    return true;
+  if (blacklist.includes(userId)) {
+    return false;
   }
 
-  return false;
+  blacklist.push(userId);
+  saveBlacklist(blacklist);
+
+  return true;
 }
 
 export function removeFromBlacklist(userId) {
+  userId = String(userId);
+
   const blacklist = loadBlacklist();
   const index = blacklist.indexOf(userId);
 
@@ -60,6 +72,7 @@ export function removeFromBlacklist(userId) {
 
   blacklist.splice(index, 1);
   saveBlacklist(blacklist);
+
   return true;
 }
 
