@@ -27,25 +27,27 @@ export default {
                 .setMaxLength(10),
         ),
 
-    category: 'core',
+    category: 'Core',
 
     usage: '[prefix]',
 
     async execute(interaction, config, client) {
-        // Only allow the bot owner to use /prefix.
+        // Only the bot owner can use this command.
         if (interaction.user.id !== OWNER_ID) {
             throw new TitanBotError(
                 'Missing permission',
                 ErrorTypes.PERMISSION,
                 'You do not have permission to use this command.',
-                { subtype: 'prefix_owner_only' },
+                {
+                    subtype: 'prefix_owner_only',
+                    userId: interaction.user.id,
+                },
             );
         }
 
         const newPrefix =
             interaction.options.getString('prefix');
 
-        // Get the currently configured prefix.
         const currentPrefix =
             await getConfigValue(
                 client,
@@ -58,8 +60,7 @@ export default {
                 },
             );
 
-        // If no new prefix was provided, display
-        // the current prefix.
+        // /prefix with no argument = show current prefix.
         if (newPrefix === null) {
             const embed =
                 new EmbedBuilder()
@@ -84,7 +85,9 @@ export default {
                 'Invalid prefix',
                 ErrorTypes.USER_INPUT,
                 'The prefix cannot be empty.',
-                { subtype: 'empty_prefix' },
+                {
+                    subtype: 'empty_prefix',
+                },
             );
         }
 
@@ -93,12 +96,12 @@ export default {
                 'Invalid prefix',
                 ErrorTypes.USER_INPUT,
                 'The prefix cannot be longer than 10 characters.',
-                { subtype: 'prefix_too_long' },
+                {
+                    subtype: 'prefix_too_long',
+                },
             );
         }
 
-        // Save the new prefix using the existing guild
-        // configuration system.
         await setConfigValue(
             client,
             interaction.guild.id,
