@@ -1271,7 +1271,7 @@ async function handlePrefixCommand(
                             title:
                                 '🚫 You Are Blacklisted',
                             description:
-                                `You are blacklisted from using this bot.\n\nYou do not have permission to use any commands from this bot.\n\nIf you believe this was done in error, please contact the bot owner.`,
+                                `You are blacklisted from using this bot.\n\nYou do not have permission to use any commands from this bot.\n\nIf you believe this was done in error, please contact the bot owner and developer, Voo.`,
                             color:
                                 'error',
                         }),
