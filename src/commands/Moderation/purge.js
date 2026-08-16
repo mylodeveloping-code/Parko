@@ -29,9 +29,7 @@ export default {
     .addUserOption((option) =>
       option
         .setName('target')
-        .setDescription(
-          'Optional user whose messages should be deleted'
-        )
+        .setDescription('Only delete messages sent by this user')
         .setRequired(false)
     )
     .setDefaultMemberPermissions(
@@ -74,58 +72,37 @@ export default {
     const channel =
       interaction.channel;
 
-    if (
-      !Number.isInteger(amount) ||
-      amount < 1 ||
-      amount > 100
-    ) {
+    if (!channel) {
       return await replyUserError(interaction, {
         type: ErrorTypes.VALIDATION,
         message:
-          'Please specify a number between 1 and 100.',
+          'This command cannot be used in this channel.',
       });
     }
 
     try {
-      let messagesToDelete;
+      let deletedCount = 0;
 
       // ========================================================
-      // NORMAL PURGE
+      // NO TARGET
       // ========================================================
 
       if (!target) {
+        /*
+         * No target was specified.
+         *
+         * Simply delete the newest requested amount
+         * of messages.
+         */
+
         const fetched =
           await channel.messages.fetch({
             limit: amount,
           });
 
-        messagesToDelete =
-          fetched;
-      }
-
-      // ========================================================
-      // TARGETED PURGE
-      // ========================================================
-
-      else {
-        messagesToDelete =
-          await findMessagesByUser(
-            channel,
-            target.id,
-            amount
-          );
-      }
-
-      // ========================================================
-      // DELETE
-      // ========================================================
-
-      let deletedCount = 0;
-
-      if (messagesToDelete.size > 0) {
         const deleted =
           await channel.bulkDelete(
-            messagesToDelete,
+            fetched,
             true
           );
 
@@ -134,12 +111,40 @@ export default {
       }
 
       // ========================================================
-      // LOG
+      // TARGET SPECIFIED
       // ========================================================
 
-      const targetText = target
-        ? `${target.tag} (${target.id})`
-        : 'All users';
+      else {
+        /*
+         * Target was specified.
+         *
+         * Discord only lets us fetch up to 100 messages
+         * at a time, so we search backwards through the
+         * channel until we have found the requested amount.
+         */
+
+        const messagesToDelete =
+          await findMessagesByUser({
+            channel,
+            userId: target.id,
+            amount,
+          });
+
+        if (messagesToDelete.length > 0) {
+          const deleted =
+            await channel.bulkDelete(
+              messagesToDelete,
+              true
+            );
+
+          deletedCount =
+            deleted.size;
+        }
+      }
+
+      // ========================================================
+      // LOG
+      // ========================================================
 
       await logEvent({
         client,
@@ -147,25 +152,36 @@ export default {
         event: {
           action: 'Messages Purged',
 
-          target:
-            `${channel} (${deletedCount} messages)`,
+          target: target
+            ? `${target.tag || target.username} (${target.id})`
+            : `${channel} (${deletedCount} messages)`,
 
           executor:
             `${interaction.user.tag} (${interaction.user.id})`,
 
           reason:
             target
-              ? `Deleted ${deletedCount} messages from ${target.tag}`
+              ? `Deleted ${deletedCount} messages sent by ${target.tag || target.username}`
               : `Deleted ${deletedCount} messages`,
 
           metadata: {
-            channelId: channel.id,
-            messageCount: deletedCount,
-            requestedAmount: amount,
-            moderatorId: interaction.user.id,
-            commandType: 'slash',
-            targetUserId: target?.id || null,
-            targetUsername: target?.tag || null,
+            channelId:
+              channel.id,
+
+            messageCount:
+              deletedCount,
+
+            requestedAmount:
+              amount,
+
+            targetUserId:
+              target?.id || null,
+
+            moderatorId:
+              interaction.user.id,
+
+            commandType:
+              'slash',
           },
         },
       });
@@ -174,9 +190,10 @@ export default {
       // RESPONSE
       // ========================================================
 
-      const description = target
-        ? `Deleted **${deletedCount}** message${deletedCount === 1 ? '' : 's'} from **${target.tag}** in ${channel}.`
-        : `Deleted **${deletedCount}** message${deletedCount === 1 ? '' : 's'} in ${channel}.`;
+      const description =
+        target
+          ? `Deleted **${deletedCount}** message${deletedCount === 1 ? '' : 's'} from **${target.tag || target.username}** in ${channel}.`
+          : `Deleted **${deletedCount}** message${deletedCount === 1 ? '' : 's'} in ${channel}.`;
 
       await InteractionHelper.safeEditReply(
         interaction,
@@ -187,7 +204,9 @@ export default {
               description
             ),
           ],
-          flags: MessageFlags.Ephemeral,
+
+          flags:
+            MessageFlags.Ephemeral,
         }
       );
 
@@ -221,7 +240,7 @@ export default {
     }
 
     if (!Array.isArray(args)) {
-      return;
+      args = [];
     }
 
     const amount =
@@ -238,79 +257,55 @@ export default {
     const channel =
       message.channel;
 
-    // ========================================================
-    // FIND TARGET
-    // ========================================================
+    /*
+     * Optional target.
+     *
+     * Supports:
+     *
+     * .purge 100 @Dyno
+     * .purge 100 155149108183695360
+     * .purge 100 Dyno
+     */
 
-    let targetId = null;
-    let targetUser = null;
+    const targetInput =
+      args.slice(1).join(' ').trim();
 
-    if (args.length >= 2) {
-      const targetInput =
-        String(args[1]).trim();
+    let targetUserId = null;
+    let targetDisplayName = null;
 
-      targetId =
-        extractUserId(targetInput);
-
-      if (targetId) {
-        targetUser =
-          await client.users
-            .fetch(targetId)
-            .catch(() => null);
-      }
-
-      /*
-       * If it wasn't a mention or ID, try finding
-       * the member by username/display name.
-       */
-
-      if (!targetUser) {
-        const members =
-          await message.guild.members.fetch();
-
-        const search =
+    if (targetInput) {
+      const resolvedTarget =
+        await resolveTargetUser(
+          message,
           targetInput
-            .replace(/^@/, '')
-            .toLowerCase();
+        );
 
-        const member =
-          members.find((member) =>
-            member.user.username
-              .toLowerCase() === search ||
-            member.displayName
-              .toLowerCase() === search ||
-            member.user.tag
-              .toLowerCase() === search
-          );
-
-        if (member) {
-          targetUser =
-            member.user;
-
-          targetId =
-            member.user.id;
-        }
-      }
-
-      if (!targetId || !targetUser) {
+      if (!resolvedTarget) {
         return;
       }
+
+      targetUserId =
+        resolvedTarget.id;
+
+      targetDisplayName =
+        resolvedTarget.tag ||
+        resolvedTarget.username ||
+        targetUserId;
     }
 
     try {
-      let messagesToDelete;
+      let messagesToDelete = [];
 
       // ========================================================
-      // NORMAL PURGE
+      // NO TARGET
       // ========================================================
 
-      if (!targetId) {
+      if (!targetUserId) {
         /*
-         * We specifically fetch messages BEFORE
-         * the .purge command message.
+         * Fetch messages BEFORE the .purge command.
          *
-         * This prevents the command itself from
-         * being included in the purge.
+         * This prevents the .purge message itself from
+         * being deleted.
          */
 
         const messagesBeforeCommand =
@@ -324,17 +319,25 @@ export default {
       }
 
       // ========================================================
-      // TARGETED PURGE
+      // TARGET
       // ========================================================
 
       else {
+        /*
+         * Search backwards through the channel for messages
+         * sent by the requested user.
+         *
+         * The .purge command itself is excluded because
+         * we always fetch messages before message.id.
+         */
+
         messagesToDelete =
-          await findMessagesByUser(
+          await findMessagesByUser({
             channel,
-            targetId,
+            userId: targetUserId,
             amount,
-            message.id
-          );
+            beforeMessageId: message.id,
+          });
       }
 
       // ========================================================
@@ -343,10 +346,7 @@ export default {
 
       let deletedCount = 0;
 
-      if (
-        messagesToDelete &&
-        messagesToDelete.size > 0
-      ) {
+      if (messagesToDelete.length > 0) {
         const deleted =
           await channel.bulkDelete(
             messagesToDelete,
@@ -379,7 +379,7 @@ export default {
       );
 
       // ========================================================
-      // DELETE COMMAND MESSAGE
+      // DELETE COMMAND
       // ========================================================
 
       try {
@@ -399,27 +399,40 @@ export default {
         client,
         guild: message.guild,
         event: {
-          action: 'Messages Purged',
+          action:
+            'Messages Purged',
 
           target:
-            `${channel} (${deletedCount} messages)`,
+            targetUserId
+              ? `${targetDisplayName} (${targetUserId}) — ${channel} (${deletedCount} messages)`
+              : `${channel} (${deletedCount} messages)`,
 
           executor:
             `${message.author.tag} (${message.author.id})`,
 
           reason:
-            targetUser
-              ? `Deleted ${deletedCount} messages from ${targetUser.tag}`
+            targetUserId
+              ? `Deleted ${deletedCount} messages sent by ${targetDisplayName}`
               : `Deleted ${deletedCount} messages`,
 
           metadata: {
-            channelId: channel.id,
-            messageCount: deletedCount,
-            requestedAmount: amount,
-            moderatorId: message.author.id,
-            commandType: 'prefix',
-            targetUserId: targetUser?.id || null,
-            targetUsername: targetUser?.tag || null,
+            channelId:
+              channel.id,
+
+            messageCount:
+              deletedCount,
+
+            requestedAmount:
+              amount,
+
+            targetUserId:
+              targetUserId || null,
+
+            moderatorId:
+              message.author.id,
+
+            commandType:
+              'prefix',
           },
         },
       });
@@ -437,141 +450,225 @@ export default {
 // FIND MESSAGES BY USER
 // ============================================================
 
-async function findMessagesByUser(
+async function findMessagesByUser({
   channel,
   userId,
   amount,
-  beforeMessageId = null
-) {
-  const matchingMessages =
-    [];
+  beforeMessageId = null,
+}) {
+  const foundMessages = [];
 
-  let lastMessageId =
-    beforeMessageId;
+  let before =
+    beforeMessageId || undefined;
 
   /*
-   * Discord fetches a maximum of 100 messages
-   * per request.
+   * Keep searching until:
    *
-   * We continue fetching older messages until:
-   *
-   * 1. We find the requested amount.
-   * 2. There are no more messages.
-   *
-   * We stop after 10,000 messages to avoid
-   * accidentally scanning an enormous channel.
+   * 1. We have found the requested number of messages, or
+   * 2. Discord has no more messages to give us.
    */
 
-  const MAX_MESSAGES_TO_SCAN =
-    10_000;
-
-  let scanned =
-    0;
-
   while (
-    matchingMessages.length < amount &&
-    scanned < MAX_MESSAGES_TO_SCAN
+    foundMessages.length < amount
   ) {
-    const fetchOptions = {
-      limit: 100,
-    };
+    const remaining =
+      amount - foundMessages.length;
 
-    if (lastMessageId) {
-      fetchOptions.before =
-        lastMessageId;
-    }
+    /*
+     * Discord allows a maximum of 100 messages
+     * per fetch.
+     */
 
-    const batch =
-      await channel.messages.fetch(
-        fetchOptions
+    const fetchLimit =
+      Math.min(
+        100,
+        Math.max(1, remaining)
       );
 
-    if (batch.size === 0) {
+    const fetched =
+      await channel.messages.fetch({
+        limit: fetchLimit,
+        before,
+      });
+
+    if (fetched.size === 0) {
       break;
     }
 
-    scanned +=
-      batch.size;
+    for (const msg of fetched.values()) {
+      /*
+       * Only include messages from the target user.
+       */
 
-    for (const msg of batch.values()) {
       if (
         msg.author?.id === userId
       ) {
-        matchingMessages.push(
-          msg
-        );
+        /*
+         * Only include messages that Discord can
+         * bulk delete.
+         *
+         * bulkDelete(..., true) also ignores old messages,
+         * but avoiding them here makes the result cleaner.
+         */
 
         if (
-          matchingMessages.length >=
-          amount
+          Date.now() - msg.createdTimestamp <
+          14 * 24 * 60 * 60 * 1000
         ) {
-          break;
+          foundMessages.push(msg);
         }
+      }
+
+      if (
+        foundMessages.length >= amount
+      ) {
+        break;
       }
     }
 
-    const oldestMessage =
-      batch.last();
+    /*
+     * Use the oldest fetched message as the cursor
+     * for the next request.
+     */
 
-    if (!oldestMessage) {
+    const oldest =
+      fetched.last();
+
+    if (!oldest) {
       break;
     }
 
-    lastMessageId =
-      oldestMessage.id;
+    before =
+      oldest.id;
 
     /*
      * If fewer than 100 messages were returned,
-     * we've reached the beginning of the channel.
+     * Discord has reached the end of the available
+     * message history.
      */
 
-    if (batch.size < 100) {
+    if (
+      fetched.size < fetchLimit
+    ) {
       break;
     }
   }
 
-  /*
-   * Convert the array into a Collection-like
-   * structure that bulkDelete accepts.
-   */
-
-  const collection =
-    new Map();
-
-  for (const message of matchingMessages) {
-    collection.set(
-      message.id,
-      message
-    );
-  }
-
-  return collection;
+  return foundMessages.slice(
+    0,
+    amount
+  );
 }
 
 // ============================================================
-// EXTRACT USER ID
+// RESOLVE PREFIX TARGET
 // ============================================================
 
-function extractUserId(input) {
-  if (!input) {
+async function resolveTargetUser(
+  message,
+  input
+) {
+  /*
+   * Remove Discord mention formatting:
+   *
+   * <@123456789>
+   * <@!123456789>
+   */
+
+  const mentionMatch =
+    input.match(
+      /^<@!?(\d+)>$/
+    );
+
+  if (mentionMatch) {
+    const userId =
+      mentionMatch[1];
+
+    const member =
+      await message.guild.members
+        .fetch(userId)
+        .catch(() => null);
+
+    if (member) {
+      return member.user;
+    }
+
     return null;
   }
 
-  const value =
-    String(input).trim();
+  /*
+   * Direct Discord user ID.
+   */
 
-  // <@123456789>
-  const mentionMatch =
-    value.match(/^<@!?(\d+)>$/);
+  if (/^\d{17,20}$/.test(input)) {
+    const member =
+      await message.guild.members
+        .fetch(input)
+        .catch(() => null);
 
-  if (mentionMatch) {
-    return mentionMatch[1];
+    if (member) {
+      return member.user;
+    }
+
+    /*
+     * The user may not currently be in the guild.
+     * Try fetching them directly from Discord.
+     */
+
+    const user =
+      await message.client.users
+        .fetch(input)
+        .catch(() => null);
+
+    return user || null;
   }
 
-  // 123456789
-  if (/^\d+$/.test(value)) {
-    return value;
+  /*
+   * Try matching a guild member by:
+   *
+   * - username
+   * - display name
+   * - global name
+   * - tag
+   */
+
+  const search =
+    input.toLowerCase();
+
+  const members =
+    await message.guild.members
+      .fetch()
+      .catch(() => null);
+
+  if (!members) {
+    return null;
   }
 
-  return null;
+  const member =
+    members.find((guildMember) => {
+      const username =
+        guildMember.user.username
+          ?.toLowerCase();
+
+      const globalName =
+        guildMember.user.globalName
+          ?.toLowerCase();
+
+      const displayName =
+        guildMember.displayName
+          ?.toLowerCase();
+
+      const tag =
+        guildMember.user.tag
+          ?.toLowerCase();
+
+      return (
+        username === search ||
+        globalName === search ||
+        displayName === search ||
+        tag === search
+      );
+    });
+
+  return member?.user || null;
 }
