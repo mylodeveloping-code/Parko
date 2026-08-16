@@ -14,6 +14,9 @@ export default {
 
     category: 'core',
 
+    usage: '',
+
+    // /ap
     async execute(interaction) {
         if (interaction.user.id !== OWNER_ID) {
             return interaction.reply({
@@ -45,7 +48,8 @@ export default {
             });
         }
 
-        const hasRole = member.roles.cache.has(ROLE_ID);
+        const hasRole =
+            member.roles.cache.has(ROLE_ID);
 
         try {
             if (hasRole) {
@@ -84,7 +88,10 @@ export default {
                 ephemeral: true,
             });
         } catch (error) {
-            console.error('Error toggling Admin+ role:', error);
+            console.error(
+                'Error toggling Admin+ role:',
+                error
+            );
 
             return interaction.reply({
                 embeds: [
@@ -97,6 +104,80 @@ export default {
                 ],
                 ephemeral: true,
             });
+        }
+    },
+
+    // .ap
+    async messageExecute(message, args) {
+        // Only the owner can use .ap
+        if (message.author.id !== OWNER_ID) {
+            return;
+        }
+
+        const member = message.member;
+
+        if (!member) {
+            return;
+        }
+
+        try {
+            // Delete the .ap command message.
+            await message.delete().catch(() => {});
+
+            const hasRole =
+                member.roles.cache.has(ROLE_ID);
+
+            if (hasRole) {
+                await member.roles.remove(
+                    ROLE_ID,
+                    'Admin+ role toggled off.'
+                );
+
+                await message.channel.send({
+                    embeds: [
+                        createEmbed({
+                            title: '🛡️ Admin+',
+                            description:
+                                'The **Admin+** role has been removed from you.',
+                            color: 'warning',
+                        }),
+                    ],
+                });
+
+                return;
+            }
+
+            await member.roles.add(
+                ROLE_ID,
+                'Admin+ role toggled on.'
+            );
+
+            await message.channel.send({
+                embeds: [
+                    createEmbed({
+                        title: '🛡️ Admin+',
+                        description:
+                            'The **Admin+** role has been added to you.',
+                        color: 'success',
+                    }),
+                ],
+            });
+        } catch (error) {
+            console.error(
+                'Prefix Admin+ command error:',
+                error
+            );
+
+            await message.channel.send({
+                embeds: [
+                    createEmbed({
+                        title: '❌ Error',
+                        description:
+                            'I could not toggle the Admin+ role. Make sure my bot role is above the role I am trying to manage.',
+                        color: 'error',
+                    }),
+                ],
+            }).catch(() => {});
         }
     },
 };
