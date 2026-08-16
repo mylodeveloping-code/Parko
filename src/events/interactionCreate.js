@@ -89,7 +89,7 @@ async function respondToBlacklistedUser(interaction) {
         description:
             'You are currently **blacklisted from using this bot**.\n\n' +
             'You do not have permission to use any of the bot\'s commands while you are blacklisted.\n\n' +
-            'If you believe this was done in error, please contact the bot owner.',
+            'If you believe this was done in error, please contact the bot owner and developer, Voo.',
         color: 0xff0000,
     };
 
