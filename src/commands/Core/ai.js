@@ -7,10 +7,6 @@ import OpenAI from 'openai';
 
 import { logger } from '../../utils/logger.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
-import {
-  replyUserError,
-  ErrorTypes,
-} from '../../utils/errorHandler.js';
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -31,43 +27,27 @@ export default {
   category: 'core',
 
   async execute(interaction) {
-    const question = interaction.options.getString('question');
+    const question =
+      interaction.options.getString('question');
 
     if (!process.env.OPENAI_API_KEY) {
-      logger.error('OPENAI_API_KEY is not configured.');
-
-      return await replyUserError(interaction, {
-        type: ErrorTypes.UNKNOWN,
-        message:
-          'The AI system is not configured right now.',
-      });
-    }
-
-    const deferSuccess =
-      await InteractionHelper.safeDefer(interaction, {
+      return await interaction.reply({
+        content:
+          '❌ OPENAI_API_KEY is missing from the bot configuration.',
         flags: MessageFlags.Ephemeral,
       });
-
-    if (!deferSuccess) {
-      logger.warn('AI interaction defer failed', {
-        userId: interaction.user.id,
-        guildId: interaction.guildId,
-      });
-
-      return;
     }
 
     try {
+      await interaction.deferReply({
+        flags: MessageFlags.Ephemeral,
+      });
+
       const response = await openai.responses.create({
         model: 'gpt-5-mini',
-        input: [
-          {
-            role: 'user',
-            content: question,
-          },
-        ],
         instructions:
           'You are the AI assistant for a Discord bot. Give helpful, accurate, concise answers. Do not claim to have abilities you do not have.',
+        input: question,
       });
 
       const answer = response.output_text?.trim();
@@ -78,16 +58,14 @@ export default {
         );
       }
 
-      // Discord messages have a 2000-character limit.
       const chunks = [];
 
       for (let i = 0; i < answer.length; i += 1900) {
         chunks.push(answer.substring(i, i + 1900));
       }
 
-      await InteractionHelper.safeEditReply(interaction, {
+      await interaction.editReply({
         content: chunks[0],
-        flags: MessageFlags.Ephemeral,
       });
 
       for (let i = 1; i < chunks.length; i++) {
@@ -96,20 +74,36 @@ export default {
           flags: MessageFlags.Ephemeral,
         });
       }
-    } catch (error) {
-      logger.error('AI command error', {
-        error: error?.message || error,
-        status: error?.status,
-        code: error?.code,
-        type: error?.type,
-        requestId: error?.request_id,
-      });
 
-      await replyUserError(interaction, {
-        type: ErrorTypes.UNKNOWN,
-        message:
-          'I could not get a response from the AI right now. Please try again later.',
-      });
+    } catch (error) {
+      logger.error('OPENAI ERROR', error);
+
+      let errorMessage = 'Unknown OpenAI error.';
+
+      if (error?.message) {
+        errorMessage = error.message;
+      }
+
+      if (error?.status) {
+        errorMessage += ` (Status: ${error.status})`;
+      }
+
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply({
+          content: `❌ AI Error:\n\`\`\`\n${errorMessage.substring(
+            0,
+            1800
+          )}\n\`\`\``,
+        });
+      } else {
+        await interaction.reply({
+          content: `❌ AI Error:\n\`\`\`\n${errorMessage.substring(
+            0,
+            1800
+          )}\n\`\`\``,
+          flags: MessageFlags.Ephemeral,
+        });
+      }
     }
   },
 };
