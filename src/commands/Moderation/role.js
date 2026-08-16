@@ -47,6 +47,9 @@ export default {
 
     category: "moderation",
 
+    // Prefix command usage
+    usage: "[all, target]",
+
     async execute(interaction, config, client) {
         const subcommand = interaction.options.getSubcommand();
         const roleName = interaction.options.getString("role");
@@ -134,8 +137,6 @@ export default {
                 );
             }
 
-            // Discord will not allow the bot to modify a member
-            // whose highest role is equal to or higher than the bot's.
             if (
                 target.id !== interaction.guild.ownerId &&
                 target.roles.highest.position >= botMember.roles.highest.position
@@ -191,26 +192,17 @@ export default {
 
             const members = await interaction.guild.members.fetch();
 
-            // Determine whether we're adding or removing.
-            // If at least one member doesn't have the role,
-            // add it to everyone who can receive it.
-            // Otherwise, remove it from everyone who has it.
             const manageableMembers = members.filter(
                 (member) =>
                     member.id !== interaction.guild.ownerId &&
-                    member.roles.highest.position < botMember.roles.highest.position,
+                    member.roles.highest.position <
+                        botMember.roles.highest.position,
             );
 
             const membersWithoutRole = manageableMembers.filter(
                 (member) => !member.roles.cache.has(role.id),
             );
 
-            const membersWithRole = manageableMembers.filter(
-                (member) => member.roles.cache.has(role.id),
-            );
-
-            // If everyone the bot can manage already has the role,
-            // remove it from everyone.
             const shouldRemove = membersWithoutRole.size === 0;
 
             let changed = 0;

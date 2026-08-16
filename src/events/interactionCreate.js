@@ -89,7 +89,7 @@ async function respondToBlacklistedUser(interaction) {
         description:
             'You are currently **blacklisted from using this bot**.\n\n' +
             'You do not have permission to use any of the bot\'s commands while you are blacklisted.\n\n' +
-            'If you believe this was done in error, please contact the bot owner and developer, Voo.',
+            'If you believe this was done in error, please contact the bot developer.',
         color: 0xff0000,
     };
 
@@ -207,7 +207,7 @@ export default {
             const embed = {
                 title: '⛔ Permission Denied',
                 description:
-                    'Only the bot owner and developer, Voo, can use the blacklist and unblacklist commands.',
+                    'Only the bot developer, can use the blacklist and unblacklist commands.',
                 color: 0xff0000,
             };
 
