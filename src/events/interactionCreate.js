@@ -29,6 +29,7 @@ import { resolveSlashAccessKey } from '../utils/messageAdapter.js';
 import { isCollectorManagedComponent } from '../utils/collectorComponents.js';
 import { ResponseCoordinator } from '../utils/responseCoordinator.js';
 import { enforceDefaultCommandPermissions } from '../utils/permissionGuard.js';
+import { InteractionHelper } from '../utils/interactionHelper.js';
 import { isBlacklisted } from '../utils/blacklist.js';
 
 // ============================================================
@@ -41,7 +42,6 @@ const PB_ACCESS_ROLE_ID = '1537847398746030100';
 // BLACKLIST
 // ============================================================
 
-// ONLY this user can use /bl and /unbl.
 const BLACKLIST_OWNER_ID = '1171948174190067737';
 
 const BLACKLIST_MANAGEMENT_COMMANDS = new Set([
@@ -92,19 +92,6 @@ async function respondToBlacklistedUser(interaction) {
             'If you believe this was done in error, please contact the bot owner and developer, Voo.',
         color: 0xff0000,
     };
-
-    /*
-     * IMPORTANT:
-     * Reply directly to the interaction.
-     *
-     * We intentionally do NOT use:
-     * - handleInteractionError()
-     * - InteractionHelper.universalReply()
-     * - ResponseCoordinator
-     *
-     * This prevents the blacklist message from being converted into
-     * the generic Discord "Something went wrong" response.
-     */
 
     try {
         if (!interaction.replied && !interaction.deferred) {
@@ -167,42 +154,20 @@ export default {
         interaction.traceId =
             interactionTraceContext.traceId;
 
-        /*
-         * ======================================================
-         * BLACKLIST CHECK — ABSOLUTE FIRST
-         * ======================================================
-         *
-         * This happens BEFORE ResponseCoordinator,
-         * InteractionHelper, command validation, cooldowns,
-         * permissions, or command execution.
-         *
-         * This is what prevents the generic:
-         *
-         * "Something went wrong"
-         *
-         * response from being generated for blacklisted users.
-         */
+        // ========================================================
+        // BLACKLIST CHECK
+        // ========================================================
 
         if (
-            interaction.isChatInputCommand() &&
             interaction.user &&
             isBlacklisted(interaction.user.id)
         ) {
-            const commandName =
-                interaction.commandName
-                    ?.toLowerCase();
-
-            /*
-             * A blacklisted user is NOT allowed to use /bl or /unbl
-             * either. Only the owner can use those commands.
-             */
             if (
-                !BLACKLIST_MANAGEMENT_COMMANDS.has(
-                    commandName
-                ) ||
-                interaction.user.id !==
-                    BLACKLIST_OWNER_ID
+                interaction.isChatInputCommand()
             ) {
+                const commandName =
+                    interaction.commandName?.toLowerCase();
+
                 logger.info(
                     `Blocked blacklisted user ${interaction.user.tag} (${interaction.user.id}) from using /${commandName}.`
                 );
@@ -213,22 +178,31 @@ export default {
 
                 return;
             }
+
+            if (
+                interaction.isAutocomplete() ||
+                interaction.isButton() ||
+                interaction.isStringSelectMenu() ||
+                interaction.isModalSubmit()
+            ) {
+                await respondToBlacklistedUser(
+                    interaction
+                );
+
+                return;
+            }
         }
 
-        /*
-         * ======================================================
-         * OWNER-ONLY /BL AND /UNBL
-         * ======================================================
-         */
+        // ========================================================
+        // OWNER-ONLY /BL AND /UNBL
+        // ========================================================
 
         if (
             interaction.isChatInputCommand() &&
             BLACKLIST_MANAGEMENT_COMMANDS.has(
-                interaction.commandName
-                    ?.toLowerCase()
+                interaction.commandName?.toLowerCase()
             ) &&
-            interaction.user.id !==
-                BLACKLIST_OWNER_ID
+            interaction.user.id !== BLACKLIST_OWNER_ID
         ) {
             const embed = {
                 title: '⛔ Permission Denied',
@@ -256,11 +230,10 @@ export default {
             interactionTraceContext,
             async () => {
                 try {
-                    /*
-                     * These are intentionally initialized AFTER the
-                     * blacklist check so blacklisted users never enter
-                     * the normal interaction pipeline.
-                     */
+                    // ==================================================
+                    // PATCH INTERACTION RESPONSES
+                    // ==================================================
+
                     InteractionHelper.patchInteractionResponses(
                         interaction
                     );
@@ -273,7 +246,9 @@ export default {
                     // SLASH COMMANDS
                     // ==================================================
 
-                    if (interaction.isChatInputCommand()) {
+                    if (
+                        interaction.isChatInputCommand()
+                    ) {
                         try {
                             logger.info(
                                 `Command executed: /${interaction.commandName} by ${interaction.user.tag}`,
@@ -308,6 +283,10 @@ export default {
                                 )
                             );
 
+                            // ==================================================
+                            // FIND COMMAND
+                            // ==================================================
+
                             const command =
                                 client.commands.get(
                                     interaction.commandName
@@ -328,9 +307,9 @@ export default {
                                 );
                             }
 
-                            // ==============================================
+                            // ==================================================
                             // MAINTENANCE MODE
-                            // ==============================================
+                            // ==================================================
 
                             if (
                                 isMaintenanceMode() &&
@@ -354,9 +333,9 @@ export default {
                                 );
                             }
 
-                            // ==============================================
+                            // ==================================================
                             // COMMAND CATEGORY
-                            // ==============================================
+                            // ==================================================
 
                             if (
                                 !isCommandCategoryEnabled(
@@ -381,9 +360,9 @@ export default {
                                 );
                             }
 
-                            // ==============================================
+                            // ==================================================
                             // DEFAULT COOLDOWN
-                            // ==============================================
+                            // ==================================================
 
                             const defaultCooldownSec =
                                 Number(
@@ -444,9 +423,9 @@ export default {
                                 );
                             }
 
-                            // ==============================================
+                            // ==================================================
                             // ABUSE PROTECTION
-                            // ==============================================
+                            // ==================================================
 
                             const abuseProtection =
                                 await enforceAbuseProtection(
@@ -488,9 +467,9 @@ export default {
                                 );
                             }
 
-                            // ==============================================
+                            // ==================================================
                             // GUILD CONFIGURATION
-                            // ==============================================
+                            // ==================================================
 
                             let guildConfig = null;
 
@@ -532,9 +511,9 @@ export default {
                                 }
                             }
 
-                            // ==============================================
+                            // ==================================================
                             // PB ACCESS PERMISSION OVERRIDE
-                            // ==============================================
+                            // ==================================================
 
                             const hasPBAccess =
                                 interaction.member?.roles?.cache?.has(
@@ -574,9 +553,9 @@ export default {
                                 }
                             }
 
-                            // ==============================================
+                            // ==================================================
                             // EXECUTE COMMAND
-                            // ==============================================
+                            // ==================================================
 
                             await command.execute(
                                 interaction,
@@ -584,11 +563,6 @@ export default {
                                 client
                             );
                         } catch (error) {
-                            /*
-                             * Do NOT run the blacklist error through this
-                             * handler because blacklisted users were already
-                             * stopped above.
-                             */
                             await handleInteractionError(
                                 interaction,
                                 error,
@@ -607,27 +581,17 @@ export default {
                                 )
                             );
                         }
+
+                        return;
                     }
 
                     // ==================================================
                     // AUTOCOMPLETE
                     // ==================================================
 
-                    else if (
+                    if (
                         interaction.isAutocomplete()
                     ) {
-                        if (
-                            isBlacklisted(
-                                interaction.user.id
-                            )
-                        ) {
-                            await interaction
-                                .respond([])
-                                .catch(() => {});
-
-                            return;
-                        }
-
                         const autocompleteCommand =
                             client.commands.get(
                                 interaction.commandName
@@ -710,12 +674,13 @@ export default {
                                     filtered
                                         .slice(0, 25)
                                         .map((role) => ({
-                                            name: `${role.name}${
-                                                role.enabled ===
-                                                false
-                                                    ? ' (disabled)'
-                                                    : ''
-                                            }`,
+                                            name:
+                                                `${role.name}${
+                                                    role.enabled ===
+                                                    false
+                                                        ? ' (disabled)'
+                                                        : ''
+                                                }`,
                                             value:
                                                 role.name,
                                         }))
@@ -778,12 +743,13 @@ export default {
                                     filtered
                                         .slice(0, 25)
                                         .map((role) => ({
-                                            name: `${role.name}${
-                                                role.enabled ===
-                                                false
-                                                    ? ' (disabled)'
-                                                    : ''
-                                            }`,
+                                            name:
+                                                `${role.name}${
+                                                    role.enabled ===
+                                                    false
+                                                        ? ' (disabled)'
+                                                        : ''
+                                                }`,
                                             value:
                                                 role.name,
                                         }))
@@ -966,9 +932,8 @@ export default {
 
                                 const validChoices =
                                     choices.filter(
-                                        (c) =>
-                                            c !==
-                                            null
+                                        (choice) =>
+                                            choice !== null
                                     );
 
                                 await interaction.respond(
@@ -992,31 +957,17 @@ export default {
                                     .catch(() => {});
                             }
                         }
+
+                        return;
                     }
 
                     // ==================================================
                     // BUTTONS
                     // ==================================================
 
-                    else if (
+                    if (
                         interaction.isButton()
                     ) {
-                        /*
-                         * Block blacklisted users from interacting
-                         * with buttons as well.
-                         */
-                        if (
-                            isBlacklisted(
-                                interaction.user.id
-                            )
-                        ) {
-                            await respondToBlacklistedUser(
-                                interaction
-                            );
-
-                            return;
-                        }
-
                         if (
                             interaction.customId.startsWith(
                                 'shared_todo_'
@@ -1140,27 +1091,17 @@ export default {
                                 )
                             );
                         }
+
+                        return;
                     }
 
                     // ==================================================
                     // STRING SELECT MENUS
                     // ==================================================
 
-                    else if (
+                    if (
                         interaction.isStringSelectMenu()
                     ) {
-                        if (
-                            isBlacklisted(
-                                interaction.user.id
-                            )
-                        ) {
-                            await respondToBlacklistedUser(
-                                interaction
-                            );
-
-                            return;
-                        }
-
                         const [
                             customId,
                             ...args
@@ -1211,7 +1152,8 @@ export default {
                                 error,
                                 withTraceContext(
                                     {
-                                        type: 'select_menu',
+                                        type:
+                                            'select_menu',
                                         customId:
                                             interaction.customId,
                                     },
@@ -1219,27 +1161,17 @@ export default {
                                 )
                             );
                         }
+
+                        return;
                     }
 
                     // ==================================================
                     // MODALS
                     // ==================================================
 
-                    else if (
+                    if (
                         interaction.isModalSubmit()
                     ) {
-                        if (
-                            isBlacklisted(
-                                interaction.user.id
-                            )
-                        ) {
-                            await respondToBlacklistedUser(
-                                interaction
-                            );
-
-                            return;
-                        }
-
                         if (
                             interaction.customId.startsWith(
                                 'app_modal_'
@@ -1356,6 +1288,8 @@ export default {
                                 )
                             );
                         }
+
+                        return;
                     }
                 } catch (error) {
                     logger.error(
@@ -1377,11 +1311,6 @@ export default {
                         }
                     );
 
-                    /*
-                     * If this somehow reaches the outer handler and
-                     * the user is blacklisted, DO NOT show the generic
-                     * error handler.
-                     */
                     if (
                         interaction.user &&
                         isBlacklisted(
@@ -1401,7 +1330,8 @@ export default {
                             error,
                             withTraceContext(
                                 {
-                                    type: 'interaction',
+                                    type:
+                                        'interaction',
                                     commandName:
                                         interaction.commandName,
                                     customId:
