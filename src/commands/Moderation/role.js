@@ -10,7 +10,7 @@ import { TitanBotError, ErrorTypes } from '../../utils/errorHandler.js';
 export default {
     data: new SlashCommandBuilder()
         .setName('role')
-        .setDescription('Toggle a role for a user or everyone')
+        .setDescription('Toggle a role for users')
         .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
 
         // /role user
@@ -43,12 +43,37 @@ export default {
                         .setDescription('The name or part of the role name')
                         .setRequired(true),
                 ),
+        )
+
+        // /role humans
+        .addSubcommand((subcommand) =>
+            subcommand
+                .setName('humans')
+                .setDescription('Toggle a role for all human users')
+                .addStringOption((option) =>
+                    option
+                        .setName('role')
+                        .setDescription('The name or part of the role name')
+                        .setRequired(true),
+                ),
+        )
+
+        // /role bots
+        .addSubcommand((subcommand) =>
+            subcommand
+                .setName('bots')
+                .setDescription('Toggle a role for all bots')
+                .addStringOption((option) =>
+                    option
+                        .setName('role')
+                        .setDescription('The name or part of the role name')
+                        .setRequired(true),
+                ),
         ),
 
     category: 'moderation',
 
-    // Prefix command usage
-    usage: '[all, target]',
+    usage: '[user, all, humans, bots]',
 
     async execute(interaction, config, client) {
         const subcommand = interaction.options.getSubcommand();
@@ -85,6 +110,7 @@ export default {
             );
         }
 
+        // Prevent managing @everyone.
         if (role.id === interaction.guild.id) {
             throw new TitanBotError(
                 'Cannot manage everyone role',
@@ -93,6 +119,7 @@ export default {
             );
         }
 
+        // Prevent managing integration-managed roles.
         if (role.managed) {
             throw new TitanBotError(
                 'Cannot manage managed role',
@@ -111,6 +138,7 @@ export default {
             );
         }
 
+        // Bot cannot manage a role equal to or higher than its highest role.
         if (role.position >= botMember.roles.highest.position) {
             throw new TitanBotError(
                 'Role too high',
@@ -119,6 +147,8 @@ export default {
             );
         }
 
+        // User cannot manage a role equal to or higher than their highest role,
+        // unless they are the server owner.
         if (
             interaction.member.id !== interaction.guild.ownerId &&
             role.position >= interaction.member.roles.highest.position
@@ -147,6 +177,7 @@ export default {
                 );
             }
 
+            // Prevent modifying users whose highest role is too high.
             if (
                 target.id !== interaction.guild.ownerId &&
                 target.roles.highest.position >=
@@ -203,16 +234,38 @@ export default {
 
         // ==========================================
         // /role all
+        // /role humans
+        // /role bots
         // ==========================================
 
-        if (subcommand === 'all') {
+        if (
+            subcommand === 'all' ||
+            subcommand === 'humans' ||
+            subcommand === 'bots'
+        ) {
             await interaction.deferReply();
 
             const members =
                 await interaction.guild.members.fetch();
 
+            // First determine which members belong to the selected group.
+            let selectedMembers;
+
+            if (subcommand === 'humans') {
+                selectedMembers = members.filter(
+                    (member) => !member.user.bot,
+                );
+            } else if (subcommand === 'bots') {
+                selectedMembers = members.filter(
+                    (member) => member.user.bot,
+                );
+            } else {
+                selectedMembers = members;
+            }
+
+            // Only include members the bot is actually able to manage.
             const manageableMembers =
-                members.filter(
+                selectedMembers.filter(
                     (member) =>
                         member.id !==
                             interaction.guild.ownerId &&
@@ -220,14 +273,16 @@ export default {
                             botMember.roles.highest.position,
                 );
 
+            // Find members in the selected group who do not currently have
+            // the role.
             const membersWithoutRole =
                 manageableMembers.filter(
                     (member) =>
                         !member.roles.cache.has(role.id),
                 );
 
-            // If nobody is missing the role, remove it
-            // from everyone. Otherwise, add it to everyone.
+            // If nobody is missing the role, remove it from everyone
+            // in the selected group. Otherwise, add it to everyone missing it.
             const shouldRemove =
                 membersWithoutRole.size === 0;
 
@@ -246,7 +301,7 @@ export default {
                         ) {
                             await member.roles.remove(
                                 role,
-                                `Role toggled for everyone by ${interaction.user.tag}`,
+                                `Role toggled for ${subcommand} by ${interaction.user.tag}`,
                             );
 
                             changed++;
@@ -259,7 +314,7 @@ export default {
                         ) {
                             await member.roles.add(
                                 role,
-                                `Role toggled for everyone by ${interaction.user.tag}`,
+                                `Role toggled for ${subcommand} by ${interaction.user.tag}`,
                             );
 
                             changed++;
@@ -273,17 +328,27 @@ export default {
             const action =
                 shouldRemove ? 'Removed' : 'Added';
 
+            let groupName;
+
+            if (subcommand === 'humans') {
+                groupName = 'human users';
+            } else if (subcommand === 'bots') {
+                groupName = 'bots';
+            } else {
+                groupName = 'everyone';
+            }
+
             await interaction.editReply({
                 embeds: [
                     successEmbed(
                         shouldRemove
-                            ? '➖ **Role Removed From Everyone**'
-                            : '➕ **Role Added To Everyone**',
+                            ? `➖ **Role Removed From ${groupName}**`
+                            : `➕ **Role Added To ${groupName}**`,
                         `${action} **${role.name}** ${
                             shouldRemove
                                 ? 'from'
                                 : 'to'
-                        } **${changed}** member(s).${
+                        } **${changed}** ${groupName}.${
                             skipped > 0
                                 ? ` Skipped **${skipped}** member(s) that could not be modified.`
                                 : ''
