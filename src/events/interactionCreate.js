@@ -1,4 +1,4 @@
-import { Events } from 'discord.js';
+import { Events, MessageFlags } from 'discord.js';
 import { logger } from '../utils/logger.js';
 import { getGuildConfig } from '../services/config/guildConfig.js';
 import {
@@ -280,6 +280,35 @@ export default {
                         logger.info(
                             `📥 Received slash command /${commandName} from ${interaction.user?.tag || interaction.user?.id}.`
                         );
+
+                        // ==================================================
+                        // IMMEDIATE MUSIC ACKNOWLEDGEMENT
+                        // ==================================================
+                        //
+                        // /play performs several asynchronous operations
+                        // later in this handler. Discord only gives us
+                        // about 3 seconds to acknowledge an interaction.
+                        //
+                        // Defer /play BEFORE guild config, cooldown,
+                        // abuse protection, permission checks, etc.
+                        //
+                        if (
+                            commandName === 'play' &&
+                            !interaction.deferred &&
+                            !interaction.replied
+                        ) {
+                            logger.info(
+                                `🎵 Immediately deferring /play interaction ${interaction.id}.`
+                            );
+
+                            await interaction.deferReply({
+                                flags: MessageFlags.Ephemeral,
+                            });
+
+                            logger.info(
+                                `🎵 Successfully deferred /play interaction ${interaction.id}.`
+                            );
+                        }
 
                         // ==================================================
                         // FIND COMMAND
