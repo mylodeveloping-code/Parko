@@ -1,81 +1,58 @@
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import { PermissionFlagsBits } from 'discord.js';
+import {
+    addToBlacklist,
+    removeFromBlacklist,
+    isBlacklisted,
+} from '../../utils/blacklist.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+export default {
+    name: 'bl',
+    aliases: ['blacklist'],
+    category: 'moderation',
 
-const blacklistFile = path.join(__dirname, '../../data/blacklist.json');
+    async execute(message, args) {
+        // Only administrators can use .bl
+        if (
+            !message.member.permissions.has(
+                PermissionFlagsBits.Administrator
+            )
+        ) {
+            return;
+        }
 
-const dataDir = path.dirname(blacklistFile);
+        const userId = args[0];
 
-if (!fs.existsSync(dataDir)) {
-    fs.mkdirSync(dataDir, { recursive: true });
-}
+        if (!userId) {
+            await message.channel.send(
+                'Usage: `.bl <user ID>`'
+            );
+            return;
+        }
 
-if (!fs.existsSync(blacklistFile)) {
-    fs.writeFileSync(blacklistFile, '[]', 'utf8');
-}
+        // Make sure the ID looks like a Discord user ID
+        if (!/^\d{17,20}$/.test(userId)) {
+            await message.channel.send(
+                'Please provide a valid Discord user ID.'
+            );
+            return;
+        }
 
-function loadBlacklist() {
-    try {
-        const data = fs.readFileSync(blacklistFile, 'utf8');
-        const blacklist = JSON.parse(data);
+        // If already blacklisted, remove them
+        if (isBlacklisted(userId)) {
+            removeFromBlacklist(userId);
 
-        return Array.isArray(blacklist) ? blacklist : [];
-    } catch (error) {
-        console.error('Failed to load blacklist:', error);
-        return [];
-    }
-}
+            await message.channel.send(
+                `<@${userId}> has been removed from the blacklist.`
+            );
 
-function saveBlacklist(blacklist) {
-    try {
-        fs.writeFileSync(
-            blacklistFile,
-            JSON.stringify(blacklist, null, 2),
-            'utf8'
+            return;
+        }
+
+        // Otherwise, add them
+        addToBlacklist(userId);
+
+        await message.channel.send(
+            `<@${userId}> has been added to the blacklist.`
         );
-    } catch (error) {
-        console.error('Failed to save blacklist:', error);
-    }
-}
-
-export function isBlacklisted(userId) {
-    return loadBlacklist().includes(String(userId));
-}
-
-export function addToBlacklist(userId) {
-    userId = String(userId);
-
-    const blacklist = loadBlacklist();
-
-    if (blacklist.includes(userId)) {
-        return false;
-    }
-
-    blacklist.push(userId);
-    saveBlacklist(blacklist);
-
-    return true;
-}
-
-export function removeFromBlacklist(userId) {
-    userId = String(userId);
-
-    const blacklist = loadBlacklist();
-    const index = blacklist.indexOf(userId);
-
-    if (index === -1) {
-        return false;
-    }
-
-    blacklist.splice(index, 1);
-    saveBlacklist(blacklist);
-
-    return true;
-}
-
-export function getBlacklist() {
-    return loadBlacklist();
-}
+    },
+};
