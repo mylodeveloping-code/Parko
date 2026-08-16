@@ -1,4 +1,4 @@
-import { Events, PermissionFlagsBits } from 'discord.js';
+import { Events } from 'discord.js';
 import { logger } from '../utils/logger.js';
 import {
     getLevelingConfig,
@@ -47,10 +47,7 @@ import {
 import { WarningService } from '../services/moderation/warningService.js';
 import { ModerationService } from '../services/moderation/moderationService.js';
 
-import {
-    isBlacklisted,
-    addToBlacklist,
-} from '../utils/blacklist.js';
+import { isBlacklisted } from '../utils/blacklist.js';
 
 const MESSAGE_XP_RATE_LIMIT_ATTEMPTS = 12;
 const MESSAGE_XP_RATE_LIMIT_WINDOW_MS = 10000;
@@ -59,6 +56,7 @@ const MESSAGE_XP_RATE_LIMIT_WINDOW_MS = 10000;
 // ANTI-SPAM CONFIGURATION
 // ============================================================
 
+// 5 messages within 3 seconds = spam
 const SPAM_MESSAGE_COUNT = 5;
 const SPAM_WINDOW_MS = 3000;
 
@@ -69,11 +67,26 @@ const FOURTH_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 
 const THIRTY_DAY_BAN_MS = 30 * 24 * 60 * 60 * 1000;
 
+// PB Exempt role.
 const PB_EXEMPT_ROLE_ID = '1537848681728835635';
 
+// guildId -> userId -> recent messages
 const spamTracker = new Map();
+
+// guildId:userId -> escalation level
+//
+// 0 = no offense
+// 1 = 15 minute timeout
+// 2 = 1 hour timeout
+// 3 = warning #1 + 6 hour timeout
+// 4 = warning #2 + 24 hour timeout
+// 5 = warning #3 + 30 day ban
 const spamEscalation = new Map();
+
+// guildId:userId -> automatic timeout state
 const spamTimeoutState = new Map();
+
+// Prevent multiple punishments from being processed at once.
 const spamProcessing = new Set();
 
 // ============================================================
@@ -107,6 +120,7 @@ export default {
 
     async execute(message, client) {
         try {
+            // Ignore bots and DMs.
             if (message.author.bot || !message.guild) {
                 return;
             }
@@ -115,6 +129,7 @@ export default {
                 `Message received from ${message.author.tag}: ${message.content}`
             );
 
+            // Anti-spam runs before other message processing.
             await handleAntiSpam(message, client);
 
             const countingProcessed =
@@ -159,6 +174,10 @@ async function handleAntiSpam(message, client) {
             return;
         }
 
+        /*
+         * Don't process another spam offense while the user
+         * is already timed out.
+         */
         if (
             member.communicationDisabledUntilTimestamp &&
             member.communicationDisabledUntilTimestamp > Date.now()
@@ -180,11 +199,17 @@ async function handleAntiSpam(message, client) {
 
         const messages = guildTracker.get(userId);
 
+        /*
+         * Keep only messages from the last 3 seconds.
+         */
         const recentMessages = messages.filter(
             (entry) =>
                 now - entry.timestamp <= SPAM_WINDOW_MS
         );
 
+        /*
+         * Add this message to the current burst.
+         */
         recentMessages.push({
             timestamp: now,
             message,
@@ -195,6 +220,9 @@ async function handleAntiSpam(message, client) {
             recentMessages
         );
 
+        /*
+         * Need at least 5 messages within 3 seconds.
+         */
         if (
             recentMessages.length <
             SPAM_MESSAGE_COUNT
@@ -212,12 +240,30 @@ async function handleAntiSpam(message, client) {
         spamProcessing.add(processingKey);
 
         try {
+            /*
+             * Copy the complete spam burst.
+             */
             const spamMessages = [
                 ...recentMessages
             ];
 
+            /*
+             * Clear the tracker immediately so a new burst
+             * cannot become mixed with this one.
+             */
             guildTracker.set(userId, []);
 
+            // =================================================
+            // DELETE ALL SPAM MESSAGES
+            // =================================================
+
+            /*
+             * Unlike the previous version, we do NOT only delete
+             * duplicate-content messages.
+             *
+             * Every message that was part of the detected
+             * 5-message spam burst is now targeted for deletion.
+             */
             const messagesToDelete = spamMessages
                 .map(entry => entry?.message)
                 .filter(Boolean);
@@ -232,6 +278,13 @@ async function handleAntiSpam(message, client) {
 
                 if (deletableMessages.length > 0) {
                     try {
+                        /*
+                         * Bulk delete the entire detected burst.
+                         *
+                         * filterOld=true prevents Discord from
+                         * attempting to bulk-delete messages older
+                         * than the API allows.
+                         */
                         await message.channel.bulkDelete(
                             deletableMessages,
                             true
@@ -246,6 +299,10 @@ async function handleAntiSpam(message, client) {
                             bulkDeleteError
                         );
 
+                        /*
+                         * Fallback: individually delete every
+                         * message that Discord allows us to delete.
+                         */
                         await Promise.allSettled(
                             deletableMessages.map(
                                 async spamMessage => {
@@ -258,6 +315,7 @@ async function handleAntiSpam(message, client) {
                                             );
                                         }
                                     } catch {
+                                        // Ignore individual failures.
                                     }
                                 }
                             )
@@ -265,6 +323,10 @@ async function handleAntiSpam(message, client) {
                     }
                 }
             }
+
+            // =================================================
+            // PROCESS PUNISHMENT
+            // =================================================
 
             await processSpamOffense(
                 message,
@@ -317,6 +379,10 @@ async function processSpamOffense(
 
     let manuallyUnmutedPBExempt = false;
 
+    /*
+     * Detect an automatic timeout that was manually removed
+     * before it naturally expired.
+     */
     if (previousTimeout) {
         const timeoutShouldStillBeActive =
             now < previousTimeout.expiresAt;
@@ -349,6 +415,12 @@ async function processSpamOffense(
         }
     }
 
+    /*
+     * Normal users advance one offense.
+     *
+     * PB Exempt users whose timeout was manually removed
+     * early repeat their previous offense level.
+     */
     if (!manuallyUnmutedPBExempt) {
         offenseLevel += 1;
 
@@ -376,6 +448,10 @@ async function processSpamOffense(
         member.roles.cache.has(
             PB_EXEMPT_ROLE_ID
         );
+
+    // ========================================================
+    // OFFENSE 1 — 15 MINUTE TIMEOUT
+    // ========================================================
 
     if (offenseLevel === 1) {
         const reason =
@@ -407,9 +483,11 @@ async function processSpamOffense(
                 escalationKey,
                 {
                     offenseLevel: 1,
+
                     expiresAt:
                         Date.now() +
                         FIRST_TIMEOUT_MS,
+
                     pbExemptAtTimeout:
                         hasPBExemptRole ||
                         (
@@ -426,21 +504,30 @@ async function processSpamOffense(
                 event: {
                     action:
                         'Member Timed Out',
+
                     target,
                     executor,
+
                     reason,
+
                     duration:
                         '15 minutes',
+
                     metadata: {
                         userId,
+
                         moderatorId:
                             client.user.id,
+
                         automatic: true,
+
                         spamOffense:
                             offenseLevel,
+
                         pbExemptAtTimeout:
                             hasPBExemptRole ||
                             manuallyUnmutedPBExempt,
+
                         manuallyUnmutedPBExempt,
                     },
                 },
@@ -458,6 +545,10 @@ async function processSpamOffense(
 
         return;
     }
+
+    // ========================================================
+    // OFFENSE 2 — 1 HOUR TIMEOUT
+    // ========================================================
 
     if (offenseLevel === 2) {
         const reason =
@@ -489,9 +580,11 @@ async function processSpamOffense(
                 escalationKey,
                 {
                     offenseLevel: 2,
+
                     expiresAt:
                         Date.now() +
                         SECOND_TIMEOUT_MS,
+
                     pbExemptAtTimeout:
                         hasPBExemptRole ||
                         manuallyUnmutedPBExempt,
@@ -504,21 +597,30 @@ async function processSpamOffense(
                 event: {
                     action:
                         'Member Timed Out',
+
                     target,
                     executor,
+
                     reason,
+
                     duration:
                         '1 hour',
+
                     metadata: {
                         userId,
+
                         moderatorId:
                             client.user.id,
+
                         automatic: true,
+
                         spamOffense:
                             offenseLevel,
+
                         pbExemptAtTimeout:
                             hasPBExemptRole ||
                             manuallyUnmutedPBExempt,
+
                         manuallyUnmutedPBExempt,
                     },
                 },
@@ -537,6 +639,10 @@ async function processSpamOffense(
         return;
     }
 
+    // ========================================================
+    // OFFENSE 3 — WARNING #1 + 6 HOUR TIMEOUT
+    // ========================================================
+
     if (offenseLevel === 3) {
         const reason =
             'Automatic anti-spam: repeated spam after previous timeouts.';
@@ -551,6 +657,9 @@ async function processSpamOffense(
                     'Further spam will result in Warning #2 and a 24-hour timeout.',
             });
 
+        /*
+         * Warning #1 AND 6-hour timeout.
+         */
         await applySpamTimeout({
             message,
             member,
@@ -574,6 +683,10 @@ async function processSpamOffense(
         return;
     }
 
+    // ========================================================
+    // OFFENSE 4 — WARNING #2 + 24 HOUR TIMEOUT
+    // ========================================================
+
     if (offenseLevel === 4) {
         const reason =
             'Automatic anti-spam: repeated spam after Warning #1.';
@@ -588,6 +701,9 @@ async function processSpamOffense(
                     'Further spam will result in Warning #3 and a 30-day ban.',
             });
 
+        /*
+         * Warning #2 AND 24-hour timeout.
+         */
         await applySpamTimeout({
             message,
             member,
@@ -610,6 +726,10 @@ async function processSpamOffense(
 
         return;
     }
+
+    // ========================================================
+    // OFFENSE 5 — WARNING #3 + 30 DAY BAN
+    // ========================================================
 
     if (offenseLevel >= 5) {
         const reason =
@@ -656,21 +776,30 @@ async function processSpamOffense(
                 event: {
                     action:
                         'Member Banned',
+
                     target,
                     executor,
+
                     reason:
                         'Automatic anti-spam: third warning reached. 30 day ban.',
+
                     duration:
                         '30 days',
+
                     metadata: {
                         userId,
+
                         moderatorId:
                             client.user.id,
+
                         automatic: true,
+
                         spamOffense:
                             offenseLevel,
+
                         banDuration:
                             '30 days',
+
                         warningId:
                             warningResult?.warningId,
                     },
@@ -749,9 +878,11 @@ async function applySpamTimeout({
             escalationKey,
             {
                 offenseLevel,
+
                 expiresAt:
                     Date.now() +
                     durationMs,
+
                 pbExemptAtTimeout:
                     hasPBExemptRole ||
                     manuallyUnmutedPBExempt ||
@@ -768,18 +899,26 @@ async function applySpamTimeout({
             event: {
                 action:
                     'Member Timed Out',
+
                 target,
                 executor,
+
                 reason,
+
                 duration:
                     durationText,
+
                 metadata: {
                     userId,
+
                     moderatorId:
                         client.user.id,
+
                     automatic: true,
+
                     spamOffense:
                         offenseLevel,
+
                     pbExemptAtTimeout:
                         hasPBExemptRole ||
                         manuallyUnmutedPBExempt ||
@@ -787,7 +926,9 @@ async function applySpamTimeout({
                             previousTimeout
                                 ?.pbExemptAtTimeout
                         ),
+
                     manuallyUnmutedPBExempt,
+
                     warningTimeout:
                         offenseLevel >= 3,
                 },
@@ -1170,108 +1311,28 @@ async function handlePrefixCommand(
             return;
         }
 
+        // ====================================================
+        // BLACKLIST CHECK
+        // ====================================================
+
+        /*
+         * Blacklisted users cannot use any prefix command.
+         *
+         * This check happens immediately after confirming that
+         * the message is a prefix command, before resolving or
+         * executing the command.
+         *
+         * The .bl and .unbl commands therefore also cannot be
+         * used by someone who has already been blacklisted.
+         */
+        if (isBlacklisted(message.author.id)) {
+            return;
+        }
+
         let {
             commandName,
             args,
         } = parsed;
-
-        // ====================================================
-        // BLACKLIST COMMAND
-        // ====================================================
-
-        if (
-            commandName.toLowerCase() === 'bl'
-        ) {
-            if (
-                !message.member.permissions.has(
-                    PermissionFlagsBits.Administrator
-                )
-            ) {
-                await message.channel.send({
-                    content:
-                        '❌ You do not have permission to use this command.',
-                }).catch(() => {});
-
-                return;
-            }
-
-            const userId =
-                args?.[0];
-
-            if (!userId) {
-                await message.channel.send({
-                    content:
-                        `❌ Please provide a Discord user ID.\n\nExample: \`${prefix}bl 1335665701444386896\``,
-                }).catch(() => {});
-
-                return;
-            }
-
-            if (
-                !/^\d{17,20}$/.test(
-                    userId
-                )
-            ) {
-                await message.channel.send({
-                    content:
-                        '❌ That is not a valid Discord user ID.',
-                }).catch(() => {});
-
-                return;
-            }
-
-            if (
-                userId ===
-                message.author.id
-            ) {
-                await message.channel.send({
-                    content:
-                        '❌ You cannot blacklist yourself.',
-                }).catch(() => {});
-
-                return;
-            }
-
-            if (
-                isBlacklisted(userId)
-            ) {
-                await message.channel.send({
-                    content:
-                        `⚠️ <@${userId}> is already blacklisted.`,
-                }).catch(() => {});
-
-                return;
-            }
-
-            addToBlacklist(userId);
-
-            await message.channel.send({
-                content:
-                    `✅ <@${userId}> has been blacklisted and can no longer use this bot.`,
-            }).catch(() => {});
-
-            logger.info(
-                `${message.author.tag} blacklisted user ${userId}.`
-            );
-
-            return;
-        }
-
-        // ====================================================
-        // BLOCK BLACKLISTED USERS
-        // ====================================================
-
-        if (
-            isBlacklisted(
-                message.author.id
-            )
-        ) {
-            logger.info(
-                `Blocked prefix command from blacklisted user ${message.author.tag} (${message.author.id}).`
-            );
-
-            return;
-        }
 
         const musicPrefixShortcut =
             commandName.toLowerCase();
