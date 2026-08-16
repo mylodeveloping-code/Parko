@@ -1,5 +1,3 @@
-// messageAdapter.js
-
 import { mapArgumentsToOptions } from './prefixParser.js';
 import { handleInteractionError } from './errorHandler.js';
 import { logger } from './logger.js';
@@ -443,6 +441,10 @@ export function supportsPrefixExecution(
         return false;
     }
 
+    if (command.messageExecute) {
+        return true;
+    }
+
     if (command.prefixExecute) {
         return true;
     }
@@ -477,6 +479,44 @@ export async function executePrefixCommand(
 
         return;
     }
+
+    // ========================================================
+    // SPECIAL MESSAGE-BASED PREFIX COMMAND
+    // ========================================================
+    //
+    // Commands with messageExecute() receive the REAL
+    // Discord message.
+    //
+    // This is required for commands such as .purge because
+    // they need to manipulate the actual command message.
+    //
+    // /purge does NOT come through this function, so its
+    // slash-command behavior remains completely separate.
+    // ========================================================
+
+    if (
+        typeof command.messageExecute ===
+        'function'
+    ) {
+        try {
+            await command.messageExecute(
+                message,
+                args,
+                client
+            );
+        } catch (error) {
+            logger.error(
+                `Error executing message-based prefix command ${command.data?.name}:`,
+                error
+            );
+        }
+
+        return;
+    }
+
+    // ========================================================
+    // NORMAL PREFIX COMMANDS
+    // ========================================================
 
     const mockInteraction =
         createMockInteraction(
@@ -532,7 +572,7 @@ export async function executePrefixCommand(
         }
 
         // ====================================================
-        // EXECUTE COMMAND
+        // EXECUTE NORMAL PREFIX COMMAND
         // ====================================================
 
         if (command.prefixExecute) {
@@ -548,6 +588,7 @@ export async function executePrefixCommand(
                 client
             );
         }
+
     } catch (error) {
         await handleInteractionError(
             mockInteraction,
