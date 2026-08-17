@@ -1297,7 +1297,6 @@ async function handlePrefixCommand(
 
         const MUSIC_PREFIX_SHORTCUTS =
             new Set([
-                'join',
                 'leave',
                 'pause',
                 'resume',
@@ -1306,7 +1305,23 @@ async function handlePrefixCommand(
                 'volume',
             ]);
 
+        /*
+         * IMPORTANT:
+         *
+         * .join is intentionally NOT included in the music
+         * shortcut list.
+         *
+         * You have a separate join.js command, so .join needs
+         * to execute that command directly instead of resolving
+         * to the music command.
+         */
         if (
+            musicPrefixShortcut === 'join'
+        ) {
+            commandName = 'join';
+
+            args = [];
+        } else if (
             MUSIC_PREFIX_SHORTCUTS.has(
                 musicPrefixShortcut
             )
@@ -1323,10 +1338,22 @@ async function handlePrefixCommand(
             `Prefix command detected: ${commandName}, args: ${args.join(', ')}`
         );
 
+        /*
+         * Do NOT allow the command alias system to turn
+         * "join" into "music".
+         *
+         * This is what was causing:
+         *
+         * .join
+         * -> .music
+         * -> Usage .music [subcommand]
+         */
         const resolvedCommandName =
-            resolveCommandAlias(
-                commandName
-            );
+            commandName.toLowerCase() === 'join'
+                ? 'join'
+                : resolveCommandAlias(
+                    commandName
+                );
 
         logger.info(
             `Resolved command name: ${resolvedCommandName}`
