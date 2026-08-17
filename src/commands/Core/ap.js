@@ -10,13 +10,18 @@ const ROLE_ID = '1536486168785461338';
 export default {
     data: new SlashCommandBuilder()
         .setName('ap')
-        .setDescription('Toggle the Admin+ role.'),
+        .setDescription('Toggle the Admin+ role.')
+        .addUserOption((option) =>
+            option
+                .setName('user')
+                .setDescription('The user to toggle the role for.')
+                .setRequired(false)
+        ),
 
     category: 'core',
 
-    usage: '',
+    usage: '[user]',
 
-    // /ap
     async execute(interaction) {
         if (interaction.user.id !== OWNER_ID) {
             return interaction.reply({
@@ -32,15 +37,22 @@ export default {
             });
         }
 
-        const member = interaction.member;
+        const targetUser =
+            interaction.options.getUser('user') || interaction.user;
 
-        if (!member) {
+        let member;
+
+        try {
+            member = await interaction.guild.members.fetch(
+                targetUser.id
+            );
+        } catch {
             return interaction.reply({
                 embeds: [
                     createEmbed({
                         title: '❌ Error',
                         description:
-                            'Could not find your server member information.',
+                            'Could not find that server member.',
                         color: 'error',
                     }),
                 ],
@@ -48,14 +60,13 @@ export default {
             });
         }
 
-        const hasRole =
-            member.roles.cache.has(ROLE_ID);
-
         try {
+            const hasRole = member.roles.cache.has(ROLE_ID);
+
             if (hasRole) {
                 await member.roles.remove(
                     ROLE_ID,
-                    'Admin+ role toggled off.'
+                    `Admin+ role toggled off by ${interaction.user.tag}.`
                 );
 
                 return interaction.reply({
@@ -63,7 +74,7 @@ export default {
                         createEmbed({
                             title: '🛡️ Admin+',
                             description:
-                                'The **Admin+** role has been removed from you.',
+                                `The **Admin+** role has been removed from ${member}.`,
                             color: 'warning',
                         }),
                     ],
@@ -73,7 +84,7 @@ export default {
 
             await member.roles.add(
                 ROLE_ID,
-                'Admin+ role toggled on.'
+                `Admin+ role toggled on by ${interaction.user.tag}.`
             );
 
             return interaction.reply({
@@ -81,7 +92,7 @@ export default {
                     createEmbed({
                         title: '🛡️ Admin+',
                         description:
-                            'The **Admin+** role has been added to you.',
+                            `The **Admin+** role has been added to ${member}.`,
                         color: 'success',
                     }),
                 ],
@@ -107,39 +118,45 @@ export default {
         }
     },
 
-    // .ap
     async messageExecute(message, args) {
-        // Only the owner can use .ap
         if (message.author.id !== OWNER_ID) {
             return;
         }
 
-        const member = message.member;
-
-        if (!member) {
-            return;
-        }
-
         try {
-            // Delete the .ap command message.
             await message.delete().catch(() => {});
 
-            const hasRole =
-                member.roles.cache.has(ROLE_ID);
+            let member = message.member;
+            const target = message.mentions.members.first();
+
+            if (target) {
+                member = target;
+            } else if (args?.[0]) {
+                const userId = args[0].replace(/[<@!>]/g, '');
+
+                try {
+                    member =
+                        await message.guild.members.fetch(userId);
+                } catch {
+                    return;
+                }
+            }
+
+            if (!member) return;
+
+            const hasRole = member.roles.cache.has(ROLE_ID);
 
             if (hasRole) {
                 await member.roles.remove(
                     ROLE_ID,
-                    'Admin+ role toggled off.'
+                    `Admin+ role toggled off by ${message.author.tag}.`
                 );
-
-                return;
+            } else {
+                await member.roles.add(
+                    ROLE_ID,
+                    `Admin+ role toggled on by ${message.author.tag}.`
+                );
             }
-
-            await member.roles.add(
-                ROLE_ID,
-                'Admin+ role toggled on.'
-            );
         } catch (error) {
             console.error(
                 'Prefix Admin+ command error:',
