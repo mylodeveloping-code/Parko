@@ -203,12 +203,6 @@ export function buildPlayerButtonRows(player, guildData) {
             .setEmoji('⏭️'),
 
         new ButtonBuilder()
-            .setCustomId(MUSIC_BUTTON_IDS.SEEK)
-            .setLabel('Seek')
-            .setStyle(ButtonStyle.Secondary)
-            .setEmoji('⏩'),
-
-        new ButtonBuilder()
             .setCustomId(MUSIC_BUTTON_IDS.STOP)
             .setLabel('Stop')
             .setStyle(ButtonStyle.Danger)
