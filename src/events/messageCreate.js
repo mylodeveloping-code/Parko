@@ -1297,6 +1297,7 @@ async function handlePrefixCommand(
 
         const MUSIC_PREFIX_SHORTCUTS =
             new Set([
+                'join',
                 'leave',
                 'pause',
                 'resume',
