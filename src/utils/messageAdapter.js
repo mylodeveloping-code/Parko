@@ -1,7 +1,6 @@
 import { mapArgumentsToOptions } from './prefixParser.js';
 import { handleInteractionError } from './errorHandler.js';
 import { logger } from './logger.js';
-import { InteractionHelper } from './interactionHelper.js';
 import {
     SLASH_ONLY_COMMANDS,
 } from '../config/commands/prefixRestrictions.js';
@@ -18,6 +17,10 @@ import { isBlacklisted } from './blacklist.js';
 export {
     buildPrefixUsage,
 };
+
+// ============================================================
+// COMMAND JSON
+// ============================================================
 
 function getCommandJson(commandData) {
     if (
@@ -69,13 +72,14 @@ export function resolveSlashAccessKey(interaction) {
 // ============================================================
 
 export function resolvePrefixAccessKey(commandData, args) {
-    const options = mapArgumentsToOptions(
-        args,
-        commandData,
-    );
+    const options =
+        mapArgumentsToOptions(args, commandData);
 
-    const subcommand = options.getSubcommand();
-    const subcommandGroup = options.getSubcommandGroup();
+    const subcommand =
+        options.getSubcommand();
+
+    const subcommandGroup =
+        options.getSubcommandGroup();
 
     const commandName =
         getCommandJson(commandData)?.name;
@@ -104,7 +108,7 @@ function resolveUserId(value) {
         return null;
     }
 
-    // Already a Discord.js User
+    // Discord.js User / GuildMember
     if (
         typeof value === 'object' &&
         value.id
@@ -112,17 +116,20 @@ function resolveUserId(value) {
         return String(value.id);
     }
 
-    const stringValue = String(value).trim();
+    const stringValue =
+        String(value).trim();
 
     // <@123456789>
-    let match = stringValue.match(/^<@(\d+)>$/);
+    let match =
+        stringValue.match(/^<@(\d+)>$/);
 
     if (match) {
         return match[1];
     }
 
     // <@!123456789>
-    match = stringValue.match(/^<@!(\d+)>$/);
+    match =
+        stringValue.match(/^<@!(\d+)>$/);
 
     if (match) {
         return match[1];
@@ -137,51 +144,91 @@ function resolveUserId(value) {
 }
 
 // ============================================================
-// RESOLVE USER OBJECT
+// FIND RAW PREFIX ARGUMENT
+//
+// This is important because prefixParser.js may not expose
+// user arguments through options.getUser() in the same way
+// Discord's real SlashCommandInteraction does.
 // ============================================================
 
-function resolveUserObject(message, value) {
-    if (!value) {
+function getRawArgument(
+    args,
+    commandData,
+    optionName,
+) {
+    const commandJson =
+        getCommandJson(commandData);
+
+    const commandOptions =
+        commandJson?.options || [];
+
+    const optionIndex =
+        commandOptions.findIndex(
+            (option) =>
+                option?.name === optionName,
+        );
+
+    if (
+        optionIndex >= 0 &&
+        args?.[optionIndex] !== undefined
+    ) {
+        return args[optionIndex];
+    }
+
+    return null;
+}
+
+// ============================================================
+// RESOLVE USER
+// ============================================================
+
+function resolveUser(
+    message,
+    rawValue,
+) {
+    if (!rawValue) {
         return null;
     }
 
-    // If the parser already gave us a Discord.js User,
-    // return it directly.
+    // Already a GuildMember
     if (
-        typeof value === 'object' &&
-        value.id
+        typeof rawValue === 'object' &&
+        rawValue.id &&
+        rawValue.user
     ) {
-        // GuildMember
-        if (value.user?.id) {
-            return value.user;
-        }
-
-        // User
-        if (
-            typeof value.send === 'function' ||
-            typeof value.displayAvatarURL === 'function'
-        ) {
-            return value;
-        }
+        return rawValue.user;
     }
 
-    const userId = resolveUserId(value);
+    // Already a Discord.js User
+    if (
+        typeof rawValue === 'object' &&
+        rawValue.id
+    ) {
+        return rawValue;
+    }
+
+    const userId =
+        resolveUserId(rawValue);
 
     if (!userId) {
         return null;
     }
 
-    // Best source: guild member cache
+    // Guild member cache
     const cachedMember =
-        message.guild?.members?.cache?.get(userId);
+        message.guild?.members?.cache?.get(
+            userId,
+        );
 
     if (cachedMember?.user) {
         return cachedMember.user;
     }
 
-    // Next: client user cache
+    // Client user cache
     const cachedUser =
-        message.client?.users?.cache?.get(userId);
+        message.client?.users?.cache?.get(
+            userId,
+        );
 
     if (cachedUser) {
         return cachedUser;
@@ -194,29 +241,34 @@ function resolveUserObject(message, value) {
 // RESOLVE MEMBER
 // ============================================================
 
-function resolveMemberObject(message, value) {
-    if (!value) {
+function resolveMember(
+    message,
+    rawValue,
+) {
+    if (!rawValue) {
         return null;
     }
 
-    // Parser may already return a GuildMember.
+    // Already a GuildMember
     if (
-        typeof value === 'object' &&
-        value.id &&
-        value.user
+        typeof rawValue === 'object' &&
+        rawValue.id &&
+        rawValue.user
     ) {
-        return value;
+        return rawValue;
     }
 
-    const userId = resolveUserId(value);
+    const userId =
+        resolveUserId(rawValue);
 
     if (!userId || !message.guild) {
         return null;
     }
 
     return (
-        message.guild.members.cache.get(userId) ||
-        null
+        message.guild.members.cache.get(
+            userId,
+        ) || null
     );
 }
 
@@ -289,37 +341,47 @@ export function createMockInteraction(
             // ==================================================
 
             getUser: (name) => {
-                const rawValue =
-                    options.getUser(name);
+                /*
+                 * First try the parser's value.
+                 */
+                let rawValue = null;
 
-                if (!rawValue) {
-                    return null;
-                }
-
-                const user =
-                    resolveUserObject(
-                        message,
-                        rawValue,
-                    );
-
-                if (user) {
-                    return user;
+                try {
+                    rawValue =
+                        options.getUser(name);
+                } catch {
+                    rawValue = null;
                 }
 
                 /*
-                 * IMPORTANT:
-                 *
-                 * Do NOT return a fake "Unknown User".
-                 *
-                 * Returning a fake object causes commands such as
-                 * /warn to report:
-                 *
-                 *     warned Unknown User
-                 *
-                 * Instead, return null so the command's normal
-                 * "target not found" validation can run.
+                 * If that doesn't work, get the original
+                 * prefix argument directly.
                  */
-                return null;
+                if (!rawValue) {
+                    rawValue =
+                        getRawArgument(
+                            args,
+                            commandData,
+                            name,
+                        );
+                }
+
+                /*
+                 * If still unavailable, try generic get().
+                 */
+                if (!rawValue) {
+                    try {
+                        rawValue =
+                            options.get(name);
+                    } catch {
+                        rawValue = null;
+                    }
+                }
+
+                return resolveUser(
+                    message,
+                    rawValue,
+                );
             },
 
             // ==================================================
@@ -327,14 +389,34 @@ export function createMockInteraction(
             // ==================================================
 
             getMember: (name) => {
-                const rawValue =
-                    options.getUser(name);
+                let rawValue = null;
 
-                if (!rawValue) {
-                    return null;
+                try {
+                    rawValue =
+                        options.getUser(name);
+                } catch {
+                    rawValue = null;
                 }
 
-                return resolveMemberObject(
+                if (!rawValue) {
+                    rawValue =
+                        getRawArgument(
+                            args,
+                            commandData,
+                            name,
+                        );
+                }
+
+                if (!rawValue) {
+                    try {
+                        rawValue =
+                            options.get(name);
+                    } catch {
+                        rawValue = null;
+                    }
+                }
+
+                return resolveMember(
                     message,
                     rawValue,
                 );
@@ -345,8 +427,17 @@ export function createMockInteraction(
             // ==================================================
 
             getChannel: (name) => {
-                const rawValue =
+                let rawValue =
                     options.getString(name);
+
+                if (!rawValue) {
+                    rawValue =
+                        getRawArgument(
+                            args,
+                            commandData,
+                            name,
+                        );
+                }
 
                 if (
                     !rawValue ||
@@ -375,8 +466,17 @@ export function createMockInteraction(
             // ==================================================
 
             getRole: (name) => {
-                const rawValue =
+                let rawValue =
                     options.getString(name);
+
+                if (!rawValue) {
+                    rawValue =
+                        getRawArgument(
+                            args,
+                            commandData,
+                            name,
+                        );
+                }
 
                 if (
                     !rawValue ||
@@ -657,7 +757,7 @@ export async function executePrefixCommand(
     }
 
     // ========================================================
-    // SPECIAL MESSAGE-BASED PREFIX COMMAND
+    // MESSAGE-BASED PREFIX COMMAND
     // ========================================================
 
     if (
@@ -681,7 +781,7 @@ export async function executePrefixCommand(
     }
 
     // ========================================================
-    // NORMAL PREFIX COMMANDS
+    // CREATE MOCK INTERACTION
     // ========================================================
 
     let mockInteraction;
@@ -766,7 +866,7 @@ export async function executePrefixCommand(
         }
 
         // ====================================================
-        // FALLBACK TO NORMAL EXECUTE HANDLER
+        // FALLBACK TO NORMAL EXECUTE
         // ====================================================
 
         if (
