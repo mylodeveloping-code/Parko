@@ -35,8 +35,7 @@ function getCommandJson(commandData) {
 // ============================================================
 
 function getCommandName(command) {
-    const data =
-        getCommandJson(command?.data);
+    const data = getCommandJson(command?.data);
 
     return data?.name
         ? String(data.name).toLowerCase()
@@ -47,23 +46,14 @@ function getCommandName(command) {
 // SLASH ACCESS KEY
 // ============================================================
 
-export function resolveSlashAccessKey(
-    interaction,
-) {
+export function resolveSlashAccessKey(interaction) {
     const subcommandGroup =
-        interaction.options.getSubcommandGroup(
-            false,
-        );
+        interaction.options.getSubcommandGroup(false);
 
     const subcommand =
-        interaction.options.getSubcommand(
-            false,
-        );
+        interaction.options.getSubcommand(false);
 
-    if (
-        subcommandGroup &&
-        subcommand
-    ) {
+    if (subcommandGroup && subcommand) {
         return `${interaction.commandName} ${subcommandGroup} ${subcommand}`;
     }
 
@@ -78,21 +68,14 @@ export function resolveSlashAccessKey(
 // PREFIX ACCESS KEY
 // ============================================================
 
-export function resolvePrefixAccessKey(
-    commandData,
-    args,
-) {
-    const options =
-        mapArgumentsToOptions(
-            args,
-            commandData,
-        );
+export function resolvePrefixAccessKey(commandData, args) {
+    const options = mapArgumentsToOptions(
+        args,
+        commandData,
+    );
 
-    const subcommand =
-        options.getSubcommand();
-
-    const subcommandGroup =
-        options.getSubcommandGroup();
+    const subcommand = options.getSubcommand();
+    const subcommandGroup = options.getSubcommandGroup();
 
     const commandName =
         getCommandJson(commandData)?.name;
@@ -101,10 +84,7 @@ export function resolvePrefixAccessKey(
         return null;
     }
 
-    if (
-        subcommandGroup &&
-        subcommand
-    ) {
+    if (subcommandGroup && subcommand) {
         return `${commandName} ${subcommandGroup} ${subcommand}`;
     }
 
@@ -124,34 +104,120 @@ function resolveUserId(value) {
         return null;
     }
 
-    const stringValue =
-        String(value).trim();
-
-    let match =
-        stringValue.match(
-            /^<@(\d+)>$/,
-        );
-
-    if (match) {
-        return match[1];
-    }
-
-    match =
-        stringValue.match(
-            /^<@!(\d+)>$/,
-        );
-
-    if (match) {
-        return match[1];
-    }
-
+    // Already a Discord.js User
     if (
-        /^\d+$/.test(stringValue)
+        typeof value === 'object' &&
+        value.id
     ) {
+        return String(value.id);
+    }
+
+    const stringValue = String(value).trim();
+
+    // <@123456789>
+    let match = stringValue.match(/^<@(\d+)>$/);
+
+    if (match) {
+        return match[1];
+    }
+
+    // <@!123456789>
+    match = stringValue.match(/^<@!(\d+)>$/);
+
+    if (match) {
+        return match[1];
+    }
+
+    // Raw Discord ID
+    if (/^\d+$/.test(stringValue)) {
         return stringValue;
     }
 
     return null;
+}
+
+// ============================================================
+// RESOLVE USER OBJECT
+// ============================================================
+
+function resolveUserObject(message, value) {
+    if (!value) {
+        return null;
+    }
+
+    // If the parser already gave us a Discord.js User,
+    // return it directly.
+    if (
+        typeof value === 'object' &&
+        value.id
+    ) {
+        // GuildMember
+        if (value.user?.id) {
+            return value.user;
+        }
+
+        // User
+        if (
+            typeof value.send === 'function' ||
+            typeof value.displayAvatarURL === 'function'
+        ) {
+            return value;
+        }
+    }
+
+    const userId = resolveUserId(value);
+
+    if (!userId) {
+        return null;
+    }
+
+    // Best source: guild member cache
+    const cachedMember =
+        message.guild?.members?.cache?.get(userId);
+
+    if (cachedMember?.user) {
+        return cachedMember.user;
+    }
+
+    // Next: client user cache
+    const cachedUser =
+        message.client?.users?.cache?.get(userId);
+
+    if (cachedUser) {
+        return cachedUser;
+    }
+
+    return null;
+}
+
+// ============================================================
+// RESOLVE MEMBER
+// ============================================================
+
+function resolveMemberObject(message, value) {
+    if (!value) {
+        return null;
+    }
+
+    // Parser may already return a GuildMember.
+    if (
+        typeof value === 'object' &&
+        value.id &&
+        value.user
+    ) {
+        return value;
+    }
+
+    const userId = resolveUserId(value);
+
+    if (!userId || !message.guild) {
+        return null;
+    }
+
+    return (
+        message.guild.members.cache.get(userId) ||
+        null
+    );
 }
 
 // ============================================================
@@ -218,6 +284,10 @@ export function createMockInteraction(
                 return options.getString(name);
             },
 
+            // ==================================================
+            // GET USER
+            // ==================================================
+
             getUser: (name) => {
                 const rawValue =
                     options.getUser(name);
@@ -226,54 +296,35 @@ export function createMockInteraction(
                     return null;
                 }
 
-                const userId =
-                    resolveUserId(
+                const user =
+                    resolveUserObject(
+                        message,
                         rawValue,
                     );
 
-                if (!userId) {
-                    return null;
+                if (user) {
+                    return user;
                 }
 
-                const cachedMember =
-                    message.guild
-                        ?.members
-                        ?.cache
-                        ?.get(userId);
-
-                if (
-                    cachedMember?.user
-                ) {
-                    return cachedMember.user;
-                }
-
-                const cachedUser =
-                    message.client
-                        ?.users
-                        ?.cache
-                        ?.get(userId);
-
-                if (cachedUser) {
-                    return cachedUser;
-                }
-
-                return {
-                    id:
-                        userId,
-
-                    username:
-                        'Unknown User',
-
-                    globalName:
-                        null,
-
-                    bot:
-                        false,
-
-                    tag:
-                        'Unknown User',
-                };
+                /*
+                 * IMPORTANT:
+                 *
+                 * Do NOT return a fake "Unknown User".
+                 *
+                 * Returning a fake object causes commands such as
+                 * /warn to report:
+                 *
+                 *     warned Unknown User
+                 *
+                 * Instead, return null so the command's normal
+                 * "target not found" validation can run.
+                 */
+                return null;
             },
+
+            // ==================================================
+            // GET MEMBER
+            // ==================================================
 
             getMember: (name) => {
                 const rawValue =
@@ -283,27 +334,15 @@ export function createMockInteraction(
                     return null;
                 }
 
-                const userId =
-                    resolveUserId(
-                        rawValue,
-                    );
-
-                if (!userId) {
-                    return null;
-                }
-
-                const cachedMember =
-                    message.guild
-                        ?.members
-                        ?.cache
-                        ?.get(userId);
-
-                if (cachedMember) {
-                    return cachedMember;
-                }
-
-                return null;
+                return resolveMemberObject(
+                    message,
+                    rawValue,
+                );
             },
+
+            // ==================================================
+            // GET CHANNEL
+            // ==================================================
 
             getChannel: (name) => {
                 const rawValue =
@@ -331,6 +370,10 @@ export function createMockInteraction(
                     .catch(() => null);
             },
 
+            // ==================================================
+            // GET ROLE
+            // ==================================================
+
             getRole: (name) => {
                 const rawValue =
                     options.getString(name);
@@ -357,13 +400,25 @@ export function createMockInteraction(
                     .catch(() => null);
             },
 
+            // ==================================================
+            // GET INTEGER
+            // ==================================================
+
             getInteger: (name) => {
                 return options.getInteger(name);
             },
 
+            // ==================================================
+            // GET BOOLEAN
+            // ==================================================
+
             getBoolean: (name) => {
                 return options.getBoolean(name);
             },
+
+            // ==================================================
+            // SUBCOMMANDS
+            // ==================================================
 
             getSubcommand: () => {
                 return options.getSubcommand();
@@ -373,9 +428,17 @@ export function createMockInteraction(
                 return options.getSubcommandGroup();
             },
 
+            // ==================================================
+            // REQUIRED VALIDATION
+            // ==================================================
+
             validateRequired: () => {
                 return options.validateRequired();
             },
+
+            // ==================================================
+            // HOISTED OPTIONS
+            // ==================================================
 
             _hoistedOptions:
                 args.map(
@@ -686,7 +749,7 @@ export async function executePrefixCommand(
         }
 
         // ====================================================
-        // EXECUTE COMMAND
+        // EXECUTE PREFIX HANDLER
         // ====================================================
 
         if (
@@ -701,6 +764,10 @@ export async function executePrefixCommand(
 
             return;
         }
+
+        // ====================================================
+        // FALLBACK TO NORMAL EXECUTE HANDLER
+        // ====================================================
 
         if (
             typeof command.execute ===
