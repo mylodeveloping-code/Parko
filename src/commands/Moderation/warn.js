@@ -7,15 +7,14 @@ import {
 
 import {
     createEmbed,
-    errorEmbed,
     successEmbed,
-    infoEmbed,
     warningEmbed,
 } from '../../utils/embeds.js';
 
 import {
     logModerationAction,
     isModerationExempt,
+    resolveModerationTarget,
 } from '../../utils/moderation.js';
 
 import { logger } from '../../utils/logger.js';
@@ -41,29 +40,32 @@ const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
 
 export default {
     data: new SlashCommandBuilder()
-        .setName("warn")
-        .setDescription("Warn a user")
+        .setName('warn')
+        .setDescription('Warn a user')
         .addUserOption((o) =>
             o
-                .setName("target")
+                .setName('target')
                 .setRequired(true)
-                .setDescription("User to warn"),
+                .setDescription('User to warn'),
         )
         .addStringOption((o) =>
             o
-                .setName("reason")
+                .setName('reason')
                 .setRequired(true)
-                .setDescription("Reason for the warning"),
+                .setDescription('Reason for the warning'),
         )
-        .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers),
+        .setDefaultMemberPermissions(
+            PermissionFlagsBits.ModerateMembers
+        ),
 
-    category: "moderation",
+    category: 'moderation',
 
     async execute(interaction, config, client) {
-        const deferSuccess = await InteractionHelper.safeDefer(interaction);
+        const deferSuccess =
+            await InteractionHelper.safeDefer(interaction);
 
         if (!deferSuccess) {
-            logger.warn(`Warn interaction defer failed`, {
+            logger.warn('Warn interaction defer failed', {
                 userId: interaction.user.id,
                 guildId: interaction.guildId,
                 commandName: 'warn',
@@ -71,11 +73,20 @@ export default {
             return;
         }
 
-        const target = interaction.options.getUser("target");
-        const member = interaction.options.getMember("target");
-        const reason = interaction.options.getString("reason");
-        const moderator = interaction.user;
-        const guildId = interaction.guildId;
+        const target =
+            interaction.options.getUser('target');
+
+        const reason =
+            interaction.options.getString('reason');
+
+        const moderator =
+            interaction.user;
+
+        const guild =
+            interaction.guild;
+
+        const guildId =
+            interaction.guildId;
 
         if (!target) {
             throw new TitanBotError(
@@ -86,14 +97,29 @@ export default {
             );
         }
 
-        // Moderation exemption
-        if (isModerationExempt(target.id)) {
+        if (!guild) {
             throw new TitanBotError(
-                "User is moderation exempt",
-                ErrorTypes.VALIDATION,
-                "This user is exempt from all moderation actions.",
+                'Guild unavailable',
+                ErrorTypes.INTERNAL,
+                'This command can only be used inside a server.',
             );
         }
+
+        // ============================================
+        // MODERATION EXEMPTION
+        // ============================================
+
+        if (isModerationExempt(target.id)) {
+            throw new TitanBotError(
+                'User is moderation exempt',
+                ErrorTypes.VALIDATION,
+                'This user is exempt from all moderation actions.',
+            );
+        }
+
+        // ============================================
+        // REASON
+        // ============================================
 
         if (!reason) {
             throw new TitanBotError(
@@ -104,22 +130,50 @@ export default {
             );
         }
 
-        if (!member) {
-            throw new TitanBotError(
-                "Target not found",
-                ErrorTypes.USER_INPUT,
-                "The target user is not currently in this server."
+        // ============================================
+        // RESOLVE MEMBER
+        // ============================================
+        //
+        // DO NOT use interaction.options.getMember()
+        // as the only lookup.
+        //
+        // If the user is in the guild but isn't cached,
+        // resolveModerationTarget() fetches them.
+        //
+        // If the user genuinely isn't in the guild,
+        // member will simply be null.
+        //
+
+        const member =
+            await resolveModerationTarget(
+                guild,
+                target.id
+            );
+
+        // ============================================
+        // HIERARCHY CHECK
+        // ============================================
+        //
+        // Only perform hierarchy/role operations if
+        // the target is actually in the guild.
+        //
+
+        if (member) {
+            ModerationService.assertModerationHierarchy(
+                interaction.member,
+                member,
+                'warn'
             );
         }
 
-        ModerationService.assertModerationHierarchy(
-            interaction.member,
-            member,
-            'warn'
-        );
+        // ============================================
+        // ADD WARNING TO DATABASE
+        // ============================================
 
-        // Add the warning to the database
-        const { id, totalCount } = await WarningService.addWarning({
+        const {
+            id,
+            totalCount,
+        } = await WarningService.addWarning({
             guildId,
             userId: target.id,
             moderatorId: moderator.id,
@@ -127,81 +181,100 @@ export default {
             timestamp: Date.now(),
         });
 
-        /*
-         * WARNING ROLES
-         *
-         * 1 warning:
-         *   Warning 1
-         *
-         * 2 warnings:
-         *   Warning 1 + Warning 2
-         *
-         * 3 warnings:
-         *   Warning 1 + Warning 2 + Warning 3
-         *
-         * 4+ warnings:
-         *   Warning 1 + Warning 2 + Warning 3
-         */
+        const warningLevel =
+            Math.min(totalCount, 3);
 
-        const warningLevel = Math.min(totalCount, 3);
+        // ============================================
+        // WARNING ROLES
+        // ============================================
 
-        try {
-            // Give every warning role the user has earned.
-            for (let level = 1; level <= warningLevel; level++) {
-                const roleId = WARNING_ROLES[level];
+        if (member) {
+            try {
+                for (
+                    let level = 1;
+                    level <= warningLevel;
+                    level++
+                ) {
+                    const roleId =
+                        WARNING_ROLES[level];
 
-                if (!member.roles.cache.has(roleId)) {
-                    await member.roles.add(
-                        roleId,
-                        `Warning ${level} role - ${totalCount} total warnings`
-                    );
+                    if (
+                        !member.roles.cache.has(
+                            roleId
+                        )
+                    ) {
+                        await member.roles.add(
+                            roleId,
+                            `Warning ${level} role - ${totalCount} total warnings`
+                        );
+                    }
                 }
+
+                logger.info(
+                    `Updated warning roles for ${target.tag}`,
+                    {
+                        userId: target.id,
+                        guildId,
+                        totalWarnings: totalCount,
+                        warningLevel,
+                    }
+                );
+            } catch (roleError) {
+                logger.error(
+                    `Failed to update warning roles for ${target.tag}`,
+                    {
+                        userId: target.id,
+                        guildId,
+                        totalWarnings: totalCount,
+                        warningLevel,
+                        error: roleError,
+                    }
+                );
+
+                await InteractionHelper.safeEditReply(
+                    interaction,
+                    {
+                        embeds: [
+                            warningEmbed(
+                                `⚠️ **Warned** ${target.tag}`,
+                                `**Reason:** ${reason}\n` +
+                                `**Warning #:** ${totalCount}\n\n` +
+                                `⚠️ The warning was recorded, but I could not update the warning roles.\n` +
+                                `Make sure I have **Manage Roles** permission and that my bot role is above all three warning roles.`
+                            ),
+                        ],
+                    }
+                );
+
+                return;
             }
-
-            logger.info(`Updated warning roles for ${target.tag}`, {
-                userId: target.id,
-                guildId,
-                totalWarnings: totalCount,
-                warningLevel,
-            });
-        } catch (roleError) {
-            logger.error(`Failed to update warning roles for ${target.tag}`, {
-                userId: target.id,
-                guildId,
-                totalWarnings: totalCount,
-                warningLevel,
-                error: roleError,
-            });
-
-            await InteractionHelper.safeEditReply(interaction, {
-                embeds: [
-                    warningEmbed(
-                        `⚠️ **Warned** ${target.tag}`,
-                        `**Reason:** ${reason}\n` +
-                        `**Warning #:** ${totalCount}\n\n` +
-                        `⚠️ The warning was recorded, but I could not update the warning roles.\n` +
-                        `Make sure I have **Manage Roles** permission and that my bot role is above all three warning roles.`
-                    ),
-                ],
-            });
-
-            return;
+        } else {
+            logger.info(
+                `Warning recorded for ${target.tag}, but user is not currently in guild`,
+                {
+                    userId: target.id,
+                    guildId,
+                    totalWarnings: totalCount,
+                }
+            );
         }
 
-        /*
-         * THIRD WARNING = 30-DAY BAN
-         *
-         * Ban the user BEFORE sending the DM so the DM can
-         * accurately tell them that they have been banned.
-         */
+        // ============================================
+        // THIRD WARNING = 30-DAY BAN
+        // ============================================
+
         let wasBanned = false;
 
         if (totalCount === 3) {
             try {
-                await interaction.guild.members.ban(target.id, {
-                    reason: `Third warning - ${reason}`,
-                    deleteMessageSeconds: 0,
-                });
+                await guild.members.ban(
+                    target.id,
+                    {
+                        reason:
+                            `Third warning - ${reason}`,
+                        deleteMessageSeconds: 0,
+                    }
+                );
 
                 wasBanned = true;
 
@@ -217,35 +290,36 @@ export default {
                     }
                 );
 
-                // Schedule the unban for 30 days from now.
-                setTimeout(async () => {
-                    try {
-                        await interaction.guild.members.unban(
-                            target.id,
-                            '30-day ban expired after third warning'
-                        );
+                setTimeout(
+                    async () => {
+                        try {
+                            await guild.members.unban(
+                                target.id,
+                                '30-day ban expired after third warning'
+                            );
 
-                        logger.info(
-                            `Automatically unbanned ${target.tag} after 30 days`,
-                            {
-                                userId: target.id,
-                                guildId,
-                                warningId: id,
-                            }
-                        );
-                    } catch (unbanError) {
-                        logger.error(
-                            `Failed to automatically unban ${target.tag} after 30 days`,
-                            {
-                                userId: target.id,
-                                guildId,
-                                warningId: id,
-                                error: unbanError,
-                            }
-                        );
-                    }
-                }, THIRTY_DAYS);
-
+                            logger.info(
+                                `Automatically unbanned ${target.tag} after 30 days`,
+                                {
+                                    userId: target.id,
+                                    guildId,
+                                    warningId: id,
+                                }
+                            );
+                        } catch (unbanError) {
+                            logger.error(
+                                `Failed to automatically unban ${target.tag} after 30 days`,
+                                {
+                                    userId: target.id,
+                                    guildId,
+                                    warningId: id,
+                                    error: unbanError,
+                                }
+                            );
+                        }
+                    },
+                    THIRTY_DAYS
+                );
             } catch (banError) {
                 logger.error(
                     `Failed to ban ${target.tag} after third warning`,
@@ -260,24 +334,21 @@ export default {
             }
         }
 
-        /*
-         * DM THE WARNED USER
-         *
-         * First and second warning:
-         *   You Have Been Warned
-         *
-         * Third warning:
-         *   You Have Been Banned
-         *   You have been banned for 30 days.
-         */
+        // ============================================
+        // DM USER
+        // ============================================
+
         try {
             let warningDM;
 
-            if (totalCount === 3 && wasBanned) {
+            if (
+                totalCount === 3 &&
+                wasBanned
+            ) {
                 warningDM = createEmbed({
                     title: '🔨 You Have Been Banned',
                     description:
-                        `You have received your third warning in **${interaction.guild.name}**.\n\n` +
+                        `You have received your third warning in **${guild.name}**.\n\n` +
                         `You have been **banned for 30 days**.`,
                 })
                     .addFields(
@@ -292,12 +363,14 @@ export default {
                             inline: true,
                         }
                     )
-                    .setColor(getColor('error'));
+                    .setColor(
+                        getColor('error')
+                    );
             } else {
                 warningDM = createEmbed({
                     title: '⚠️ You Have Been Warned',
                     description:
-                        `You have received a warning in **${interaction.guild.name}**.`,
+                        `You have received a warning in **${guild.name}**.`,
                 })
                     .addFields(
                         {
@@ -311,39 +384,55 @@ export default {
                             inline: true,
                         }
                     )
-                    .setColor(getColor('warning'));
+                    .setColor(
+                        getColor('warning')
+                    );
             }
 
             await target.send({
                 embeds: [warningDM],
             });
 
-            logger.info(`Sent warning DM to ${target.tag}`, {
-                userId: target.id,
-                guildId,
-                warningId: id,
-                warningNumber: totalCount,
-                wasBanned,
-            });
-
+            logger.info(
+                `Sent warning DM to ${target.tag}`,
+                {
+                    userId: target.id,
+                    guildId,
+                    warningId: id,
+                    warningNumber: totalCount,
+                    wasBanned,
+                }
+            );
         } catch (dmError) {
-            logger.warn(`Could not DM ${target.tag} about their warning`, {
-                userId: target.id,
-                guildId,
-                warningId: id,
-                error: dmError,
-            });
+            logger.warn(
+                `Could not DM ${target.tag} about their warning`,
+                {
+                    userId: target.id,
+                    guildId,
+                    warningId: id,
+                    error: dmError,
+                }
+            );
         }
 
-        // Log the moderation action
+        // ============================================
+        // LOG MODERATION ACTION
+        // ============================================
+
         await logModerationAction({
             client,
-            guild: interaction.guild,
+            guild,
             event: {
-                action: "User Warned",
-                target: `${target.tag} (${target.id})`,
-                executor: `${moderator.tag} (${moderator.id})`,
+                action: 'User Warned',
+
+                target:
+                    `${target.tag} (${target.id})`,
+
+                executor:
+                    `${moderator.tag} (${moderator.id})`,
+
                 reason,
+
                 metadata: {
                     userId: target.id,
                     moderatorId: moderator.id,
@@ -351,29 +440,46 @@ export default {
                     warningNumber: totalCount,
                     warningLevel,
                     warningId: id,
-                    warningRoles: Object.values(WARNING_ROLES).slice(
-                        0,
-                        warningLevel
-                    ),
-                    bannedFor30Days: wasBanned,
+
+                    warningRoles:
+                        Object.values(
+                            WARNING_ROLES
+                        ).slice(
+                            0,
+                            warningLevel
+                        ),
+
+                    bannedFor30Days:
+                        wasBanned,
                 },
             },
         });
 
-        // Success response
-        await InteractionHelper.safeEditReply(interaction, {
-            embeds: [
-                successEmbed(
-                    totalCount === 3 && wasBanned
-                        ? `🔨 **Banned** ${target.tag}`
-                        : `⚠️ **Warned** ${target.tag}`,
-                    `**Reason:** ${reason}\n` +
-                    `**Warning #:** ${totalCount}` +
-                    (totalCount === 3 && wasBanned
-                        ? `\n\n🔨 **This was their third warning. They have been banned for 30 days.**`
-                        : ''),
-                ),
-            ],
-        });
+        // ============================================
+        // SUCCESS RESPONSE
+        // ============================================
+
+        await InteractionHelper.safeEditReply(
+            interaction,
+            {
+                embeds: [
+                    successEmbed(
+                        totalCount === 3 &&
+                        wasBanned
+                            ? `🔨 **Banned** ${target.tag}`
+                            : `⚠️ **Warned** ${target.tag}`,
+
+                        `**Reason:** ${reason}\n` +
+                        `**Warning #:** ${totalCount}` +
+                        (
+                            totalCount === 3 &&
+                            wasBanned
+                                ? `\n\n🔨 **This was their third warning. They have been banned for 30 days.**`
+                                : ''
+                        )
+                    ),
+                ],
+            }
+        );
     },
 };
