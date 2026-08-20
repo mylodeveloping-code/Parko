@@ -29,8 +29,6 @@ import {
 
 const MODERATION_EXEMPT_IDS = new Set([
   '1171948174190067737', // You
-  '1423028927881805874', // Owner
-  '1393674823514980352', // Co-Owner
 ]);
 
 export function isModerationExempt(userId) {
