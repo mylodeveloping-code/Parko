@@ -1,96 +1,140 @@
-import { SlashCommandBuilder, PermissionFlagsBits } from 'discord.js';
+import {
+    SlashCommandBuilder,
+    PermissionFlagsBits,
+} from 'discord.js';
+
 import { successEmbed } from '../../utils/embeds.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
 import { ModerationService } from '../../services/moderation/moderationService.js';
-import { TitanBotError, ErrorTypes } from '../../utils/errorHandler.js';
+import {
+    TitanBotError,
+    ErrorTypes,
+} from '../../utils/errorHandler.js';
 import { isModerationExempt } from '../../utils/moderation.js';
 
 export default {
     data: new SlashCommandBuilder()
-        .setName("ban")
-        .setDescription("Ban a user from the server")
+        .setName('ban')
+        .setDescription('Ban a user from the server')
+
         .addUserOption((option) =>
             option
-                .setName("target")
-                .setDescription("The user to ban")
-                .setRequired(true),
+                .setName('target')
+                .setDescription('The user to ban')
+                .setRequired(true)
         )
-        .addStringOption((option) =>
-            option
-                .setName("reason")
-                .setDescription("Reason for the ban"),
-        )
-        .addStringOption((option) =>
-            option
-                .setName("length")
-                .setDescription("Ban duration, e.g. 30m, 12h, 7d, 2w")
-                .setRequired(false),
-        )
-        .setDefaultMemberPermissions(PermissionFlagsBits.BanMembers),
 
-    category: "moderation",
+        .addStringOption((option) =>
+            option
+                .setName('length')
+                .setDescription(
+                    'Ban duration, e.g. 30m, 12h, 7d, 2w'
+                )
+                .setRequired(false)
+        )
+
+        .addStringOption((option) =>
+            option
+                .setName('reason')
+                .setDescription('Reason for the ban')
+                .setRequired(false)
+        )
+
+        .setDefaultMemberPermissions(
+            PermissionFlagsBits.BanMembers
+        ),
+
+    category: 'moderation',
 
     async execute(interaction, config, client) {
-        const user = interaction.options.getUser("target");
-
-        const reason =
-            interaction.options.getString("reason") ||
-            "No reason provided";
+        const user =
+            interaction.options.getUser('target');
 
         const length =
-            interaction.options.getString("length");
+            interaction.options.getString('length');
+
+        const reason =
+            interaction.options.getString('reason') ||
+            'No reason provided';
 
         if (!user) {
             throw new TitanBotError(
                 'Missing target user',
                 ErrorTypes.USER_INPUT,
                 'You must specify a user to ban.',
-                { subtype: 'invalid_user' },
+                {
+                    subtype: 'invalid_user',
+                }
             );
         }
 
-        // Moderation exemption
+        // ============================================
+        // MODERATION EXEMPTION
+        // ============================================
+
         if (isModerationExempt(user.id)) {
             throw new TitanBotError(
-                "User is moderation exempt",
+                'User is moderation exempt',
                 ErrorTypes.VALIDATION,
-                "This user is exempt from all moderation actions.",
+                'This user is exempt from all moderation actions.'
             );
         }
+
+        // ============================================
+        // SELF-BAN CHECK
+        // ============================================
 
         if (user.id === interaction.user.id) {
             throw new TitanBotError(
                 'Cannot ban self',
                 ErrorTypes.VALIDATION,
-                'You cannot ban yourself.',
+                'You cannot ban yourself.'
             );
         }
+
+        // ============================================
+        // BOT CHECK
+        // ============================================
 
         if (user.id === client.user.id) {
             throw new TitanBotError(
                 'Cannot ban bot',
                 ErrorTypes.VALIDATION,
-                'You cannot ban the bot.',
+                'You cannot ban the bot.'
             );
         }
 
-        const result = await ModerationService.banUser({
-            guild: interaction.guild,
-            user,
-            moderator: interaction.member,
-            reason,
-            length,
-        });
+        // ============================================
+        // BAN USER
+        // ============================================
 
-        await InteractionHelper.universalReply(interaction, {
-            embeds: [
-                successEmbed(
-                    `🚫 **Banned** ${user.tag}`,
-                    `**Reason:** ${reason}\n` +
-                    `**Length:** ${length || "Permanent"}\n` +
-                    `**Case ID:** #${result.caseId}`,
-                ),
-            ],
-        });
+        const result =
+            await ModerationService.banUser({
+                guild: interaction.guild,
+                user,
+                moderator: interaction.member,
+                reason,
+                length,
+            });
+
+        // ============================================
+        // SUCCESS RESPONSE
+        // ============================================
+
+        await InteractionHelper.universalReply(
+            interaction,
+            {
+                embeds: [
+                    successEmbed(
+                        `🚫 **Banned** ${user.tag}`,
+                        `**Reason:** ${reason}\n` +
+                        `**Length:** ${
+                            result.length || 'Permanent'
+                        }\n` +
+                        `**Case ID:** #${result.caseId}`
+                    ),
+                ],
+            }
+        );
     },
 };
