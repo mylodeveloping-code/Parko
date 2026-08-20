@@ -16,7 +16,15 @@ export default {
                 .setRequired(true),
         )
         .addStringOption((option) =>
-            option.setName("reason").setDescription("Reason for the ban"),
+            option
+                .setName("reason")
+                .setDescription("Reason for the ban"),
+        )
+        .addStringOption((option) =>
+            option
+                .setName("length")
+                .setDescription("Ban duration, e.g. 30m, 12h, 7d, 2w")
+                .setRequired(false),
         )
         .setDefaultMemberPermissions(PermissionFlagsBits.BanMembers),
 
@@ -24,9 +32,13 @@ export default {
 
     async execute(interaction, config, client) {
         const user = interaction.options.getUser("target");
+
         const reason =
             interaction.options.getString("reason") ||
             "No reason provided";
+
+        const length =
+            interaction.options.getString("length");
 
         if (!user) {
             throw new TitanBotError(
@@ -67,13 +79,16 @@ export default {
             user,
             moderator: interaction.member,
             reason,
+            length,
         });
 
         await InteractionHelper.universalReply(interaction, {
             embeds: [
                 successEmbed(
                     `🚫 **Banned** ${user.tag}`,
-                    `**Reason:** ${reason}\n**Case ID:** #${result.caseId}`,
+                    `**Reason:** ${reason}\n` +
+                    `**Length:** ${length || "Permanent"}\n` +
+                    `**Case ID:** #${result.caseId}`,
                 ),
             ],
         });

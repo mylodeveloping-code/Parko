@@ -1,5 +1,3 @@
-// moderationService.js
-
 import { PermissionFlagsBits } from 'discord.js';
 import { logger } from '../../utils/logger.js';
 import { TitanBotError, ErrorTypes } from '../../utils/errorHandler.js';
@@ -19,9 +17,63 @@ function getHighestRole(member) {
   return member?.roles?.highest ?? null;
 }
 
+// ============================================================
+// DURATION PARSER
+// ============================================================
+
+function parseDuration(value) {
+  if (!value) {
+    return null;
+  }
+
+  const match = value.trim().match(
+    /^(\d+)\s*(s|m|h|d|w)$/i
+  );
+
+  if (!match) {
+    throw new TitanBotError(
+      'Invalid duration',
+      ErrorTypes.USER_INPUT,
+      'Invalid ban length. Use formats like `30m`, `12h`, `7d`, or `2w`.'
+    );
+  }
+
+  const amount = Number(match[1]);
+  const unit = match[2].toLowerCase();
+
+  const multipliers = {
+    s: 1000,
+    m: 60 * 1000,
+    h: 60 * 60 * 1000,
+    d: 24 * 60 * 60 * 1000,
+    w: 7 * 24 * 60 * 60 * 1000,
+  };
+
+  const durationMs = amount * multipliers[unit];
+
+  if (
+    !Number.isSafeInteger(durationMs) ||
+    durationMs <= 0
+  ) {
+    throw new TitanBotError(
+      'Invalid duration',
+      ErrorTypes.USER_INPUT,
+      'The ban length is too large or invalid.'
+    );
+  }
+
+  return durationMs;
+}
+
 export class ModerationService {
 
-  static buildHierarchyMessage({ actor, actorRole, targetRole, targetLabel, action }) {
+  static buildHierarchyMessage({
+    actor,
+    actorRole,
+    targetRole,
+    targetLabel,
+    action
+  }) {
     if (actor === 'moderator') {
       return (
         `You cannot ${action} **${targetLabel}** — their role **${targetRole.name}** is equal to or above yours (**${actorRole.name}**). ` +
@@ -35,7 +87,12 @@ export class ModerationService {
     );
   }
 
-  static buildHierarchySkipReason(moderator, target, action, actor = 'moderator') {
+  static buildHierarchySkipReason(
+    moderator,
+    target,
+    action,
+    actor = 'moderator'
+  ) {
     const targetLabel = getTargetLabel(target);
     const targetRole = getHighestRole(target);
 
@@ -59,9 +116,16 @@ export class ModerationService {
     return `Your role **${modRole.name}** is too low for **${targetRole.name}** — move your role higher`;
   }
 
-  static validateHierarchy(moderator, target, action) {
+  static validateHierarchy(
+    moderator,
+    target,
+    action
+  ) {
     if (!moderator || !target) {
-      return { valid: false, error: 'Invalid moderator or target' };
+      return {
+        valid: false,
+        error: 'Invalid moderator or target'
+      };
     }
 
     if (moderator.guild?.ownerId === moderator.id) {
@@ -74,11 +138,14 @@ export class ModerationService {
     if (!modRole || !targetRole) {
       return {
         valid: false,
-        error: 'Could not resolve role hierarchy. Try mentioning the user or use the slash command.',
+        error:
+          'Could not resolve role hierarchy. Try mentioning the user or use the slash command.',
       };
     }
 
-    if (modRole.position <= targetRole.position) {
+    if (
+      modRole.position <= targetRole.position
+    ) {
       return {
         valid: false,
         error: this.buildHierarchyMessage({
@@ -94,15 +161,24 @@ export class ModerationService {
     return { valid: true };
   }
 
-  static validateBotHierarchy(target, action) {
+  static validateBotHierarchy(
+    target,
+    action
+  ) {
     if (!target) {
-      return { valid: false, error: 'Invalid target' };
+      return {
+        valid: false,
+        error: 'Invalid target'
+      };
     }
 
     const botMember = target.guild?.members?.me;
 
     if (!botMember) {
-      return { valid: false, error: 'Bot is not in the guild' };
+      return {
+        valid: false,
+        error: 'Bot is not in the guild'
+      };
     }
 
     const botRole = getHighestRole(botMember);
@@ -111,11 +187,14 @@ export class ModerationService {
     if (!botRole || !targetRole) {
       return {
         valid: false,
-        error: 'Could not resolve bot role hierarchy. Check that my role is configured in this server.',
+        error:
+          'Could not resolve bot role hierarchy. Check that my role is configured in this server.',
       };
     }
 
-    if (botRole.position <= targetRole.position) {
+    if (
+      botRole.position <= targetRole.position
+    ) {
       return {
         valid: false,
         error: this.buildHierarchyMessage({
@@ -131,8 +210,16 @@ export class ModerationService {
     return { valid: true };
   }
 
-  static assertModerationHierarchy(moderator, target, action) {
-    const botCheck = this.validateBotHierarchy(target, action);
+  static assertModerationHierarchy(
+    moderator,
+    target,
+    action
+  ) {
+    const botCheck =
+      this.validateBotHierarchy(
+        target,
+        action
+      );
 
     if (!botCheck.valid) {
       throw new TitanBotError(
@@ -142,11 +229,12 @@ export class ModerationService {
       );
     }
 
-    const modCheck = this.validateHierarchy(
-      moderator,
-      target,
-      action
-    );
+    const modCheck =
+      this.validateHierarchy(
+        moderator,
+        target,
+        action
+      );
 
     if (!modCheck.valid) {
       throw new TitanBotError(
@@ -166,7 +254,8 @@ export class ModerationService {
     user,
     moderator,
     reason = 'No reason provided',
-    deleteDays = 0
+    deleteDays = 0,
+    length = null
   }) {
     try {
       if (!guild || !user || !moderator) {
@@ -177,12 +266,20 @@ export class ModerationService {
         );
       }
 
+      const durationMs =
+        parseDuration(length);
+
+      const expiresAt = durationMs
+        ? Date.now() + durationMs
+        : null;
+
       let targetMember = null;
 
       try {
-        targetMember = await guild.members
-          .fetch(user.id)
-          .catch(() => null);
+        targetMember =
+          await guild.members
+            .fetch(user.id)
+            .catch(() => null);
       } catch (err) {
         logger.debug(
           'Target not in guild, proceeding with ban'
@@ -196,12 +293,14 @@ export class ModerationService {
           'ban'
         );
       } else {
-        const isOwner = guild.ownerId === moderator.id;
+        const isOwner =
+          guild.ownerId === moderator.id;
 
-        const hasHighPerms = moderator.permissions.has([
-          PermissionFlagsBits.ManageGuild,
-          PermissionFlagsBits.Administrator
-        ]);
+        const hasHighPerms =
+          moderator.permissions.has([
+            PermissionFlagsBits.ManageGuild,
+            PermissionFlagsBits.Administrator
+          ]);
 
         if (!isOwner && !hasHighPerms) {
           throw new TitanBotError(
@@ -212,36 +311,113 @@ export class ModerationService {
         }
       }
 
-      await guild.members.ban(user.id, { reason });
-
-      const caseId = await logModerationAction({
-        client: guild.client,
-        guild,
-        event: {
-          action: 'Member Banned',
-          target: `${user.tag} (${user.id})`,
-          executor: `${moderator.user.tag} (${moderator.id})`,
+      await guild.members.ban(
+        user.id,
+        {
           reason,
-          metadata: {
-            userId: user.id,
-            moderatorId: moderator.id,
-            permanent: true,
-            deleteDays
-          }
+          deleteMessageSeconds:
+            deleteDays * 24 * 60 * 60
         }
-      });
+      );
+
+      const caseId =
+        await logModerationAction({
+          client: guild.client,
+          guild,
+          event: {
+            action: 'Member Banned',
+            target: `${user.tag} (${user.id})`,
+            executor: `${moderator.user.tag} (${moderator.id})`,
+            reason,
+            duration:
+              length || 'Permanent',
+            metadata: {
+              userId: user.id,
+              moderatorId: moderator.id,
+              permanent: !durationMs,
+              deleteDays,
+              durationMs,
+              expiresAt
+            }
+          }
+        });
 
       logger.info(
-        `User banned: ${user.tag} by ${moderator.user.tag} in ${guild.name}`
+        `User banned: ${user.tag} by ${moderator.user.tag} in ${guild.name}` +
+        (length
+          ? ` for ${length}`
+          : ' permanently')
       );
+
+      // ========================================================
+      // AUTOMATICALLY UNBAN WHEN BAN EXPIRES
+      // ========================================================
+
+      if (durationMs) {
+        setTimeout(async () => {
+          try {
+            const bans =
+              await guild.bans.fetch();
+
+            const banInfo =
+              bans.get(user.id);
+
+            if (!banInfo) {
+              logger.info(
+                `Timed ban for ${user.tag} expired, but user is already unbanned.`
+              );
+
+              return;
+            }
+
+            await guild.members.unban(
+              user.id,
+              'Temporary ban expired'
+            );
+
+            await logModerationAction({
+              client: guild.client,
+              guild,
+              event: {
+                action: 'Temporary Ban Expired',
+                target: `${user.tag} (${user.id})`,
+                executor: `${guild.client.user.tag} (${guild.client.user.id})`,
+                reason:
+                  'Ban duration expired',
+                metadata: {
+                  userId: user.id,
+                  expiresAt,
+                  originalCaseId: caseId
+                }
+              }
+            });
+
+            logger.info(
+              `Temporary ban expired: ${user.tag} in ${guild.name}`
+            );
+          } catch (error) {
+            logger.error(
+              `Error automatically unbanning ${user.tag}:`,
+              error
+            );
+          }
+        }, durationMs);
+      }
 
       return {
         caseId,
         user: user.tag,
-        reason
+        reason,
+        length,
+        durationMs,
+        expiresAt
       };
     } catch (error) {
-      logger.error('Error banning user:', error);
+      logger.error(
+        'Error banning user:',
+        error
+      );
+
       throw error;
     }
   }
@@ -272,7 +448,8 @@ export class ModerationService {
       );
 
       if (!member.kickable) {
-        const targetLabel = getTargetLabel(member);
+        const targetLabel =
+          getTargetLabel(member);
 
         throw new TitanBotError(
           'Cannot kick member',
@@ -284,20 +461,21 @@ export class ModerationService {
 
       await member.kick(reason);
 
-      const caseId = await logModerationAction({
-        client: guild.client,
-        guild,
-        event: {
-          action: 'Member Kicked',
-          target: `${member.user.tag} (${member.id})`,
-          executor: `${moderator.user.tag} (${moderator.id})`,
-          reason,
-          metadata: {
-            userId: member.id,
-            moderatorId: moderator.id
+      const caseId =
+        await logModerationAction({
+          client: guild.client,
+          guild,
+          event: {
+            action: 'Member Kicked',
+            target: `${member.user.tag} (${member.id})`,
+            executor: `${moderator.user.tag} (${moderator.id})`,
+            reason,
+            metadata: {
+              userId: member.id,
+              moderatorId: moderator.id
+            }
           }
-        }
-      });
+        });
 
       logger.info(
         `User kicked: ${member.user.tag} by ${moderator.user.tag} in ${guild.name}`
@@ -309,7 +487,11 @@ export class ModerationService {
         reason
       };
     } catch (error) {
-      logger.error('Error kicking user:', error);
+      logger.error(
+        'Error kicking user:',
+        error
+      );
+
       throw error;
     }
   }
@@ -326,7 +508,12 @@ export class ModerationService {
     reason = 'No reason provided'
   }) {
     try {
-      if (!guild || !member || !moderator || !durationMs) {
+      if (
+        !guild ||
+        !member ||
+        !moderator ||
+        !durationMs
+      ) {
         throw new TitanBotError(
           'Missing required parameters',
           ErrorTypes.VALIDATION,
@@ -341,29 +528,30 @@ export class ModerationService {
       );
 
       if (!member.moderatable) {
-        const targetLabel = getTargetLabel(member);
+        const targetLabel =
+          getTargetLabel(member);
 
         throw new TitanBotError(
           'Cannot timeout member',
           ErrorTypes.PERMISSION,
           `I cannot timeout **${targetLabel}**. They may have **Administrator** permission or a managed/integration role. ` +
-          'Ensure my bot role is above theirs in **Server Settings → Roles** and that they do not have Admin.'
+          'Ensure my bot role is above the Muted role.'
         );
       }
 
-      // ========================================================
-      // SAVE THEIR CURRENT ROLES BEFORE REMOVING THEM
-      // ========================================================
+      const previousRoleIds =
+        getMemberRoleIds(member);
 
-      const previousRoleIds = getMemberRoleIds(member);
-      const expiresAt = Date.now() + durationMs;
+      const expiresAt =
+        Date.now() + durationMs;
 
-      const saved = await saveTimeoutRoles({
-        guildId: guild.id,
-        userId: member.id,
-        roleIds: previousRoleIds,
-        expiresAt,
-      });
+      const saved =
+        await saveTimeoutRoles({
+          guildId: guild.id,
+          userId: member.id,
+          roleIds: previousRoleIds,
+          expiresAt,
+        });
 
       if (!saved) {
         throw new TitanBotError(
@@ -373,11 +561,8 @@ export class ModerationService {
         );
       }
 
-      // ========================================================
-      // APPLY MUTED ROLE
-      // ========================================================
-
-      const mutedApplied = await applyMutedRole(member);
+      const mutedApplied =
+        await applyMutedRole(member);
 
       if (!mutedApplied) {
         throw new TitanBotError(
@@ -387,10 +572,6 @@ export class ModerationService {
         );
       }
 
-      // ========================================================
-      // APPLY DISCORD TIMEOUT
-      // ========================================================
-
       await member.timeout(
         durationMs,
         reason
@@ -399,38 +580,37 @@ export class ModerationService {
       const durationMinutes =
         Math.floor(durationMs / 60000);
 
-      const caseId = await logModerationAction({
-        client: guild.client,
-        guild,
-        event: {
-          action: 'Member Timed Out',
-          target: `${member.user.tag} (${member.id})`,
-          executor: `${moderator.user.tag} (${moderator.id})`,
-          reason,
-          duration: `${durationMinutes} minutes`,
-          metadata: {
-            userId: member.id,
-            moderatorId: moderator.id,
-            durationMs,
-            expiresAt,
-            mutedRoleId: '1537615321438093425'
+      const caseId =
+        await logModerationAction({
+          client: guild.client,
+          guild,
+          event: {
+            action: 'Member Timed Out',
+            target: `${member.user.tag} (${member.id})`,
+            executor: `${moderator.user.tag} (${moderator.id})`,
+            reason,
+            duration: `${durationMinutes} minutes`,
+            metadata: {
+              userId: member.id,
+              moderatorId: moderator.id,
+              durationMs,
+              expiresAt,
+              mutedRoleId:
+                '1537615321438093425'
+            }
           }
-        }
-      });
+        });
 
       logger.info(
         `User timed out and muted: ${member.user.tag} by ${moderator.user.tag} in ${guild.name}`
       );
 
-      // ========================================================
-      // AUTOMATICALLY RESTORE ROLES WHEN TIMEOUT EXPIRES
-      // ========================================================
-
       setTimeout(async () => {
         try {
-          const currentMember = await guild.members
-            .fetch(member.id)
-            .catch(() => null);
+          const currentMember =
+            await guild.members
+              .fetch(member.id)
+              .catch(() => null);
 
           if (!currentMember) {
             logger.warn(
@@ -439,18 +619,21 @@ export class ModerationService {
             return;
           }
 
-          // If /untimeout was already used, the saved roles
-          // have already been restored.
-          if (!currentMember.roles.cache.has('1537615321438093425')) {
+          if (
+            !currentMember.roles.cache.has(
+              '1537615321438093425'
+            )
+          ) {
             logger.info(
               `Timeout for ${currentMember.user.tag} expired, but Muted role was already removed.`
             );
             return;
           }
 
-          const restored = await restoreTimeoutRoles(
-            currentMember
-          );
+          const restored =
+            await restoreTimeoutRoles(
+              currentMember
+            );
 
           if (restored) {
             logger.info(
@@ -466,10 +649,14 @@ export class ModerationService {
             client: guild.client,
             guild,
             event: {
-              action: 'Member Timeout Expired',
-              target: `${currentMember.user.tag} (${currentMember.id})`,
-              executor: `${guild.client.user.tag} (${guild.client.user.id})`,
-              reason: 'Timeout duration expired',
+              action:
+                'Member Timeout Expired',
+              target:
+                `${currentMember.user.tag} (${currentMember.id})`,
+              executor:
+                `${guild.client.user.tag} (${guild.client.user.id})`,
+              reason:
+                'Timeout duration expired',
               metadata: {
                 userId: currentMember.id,
                 expiresAt,
@@ -477,7 +664,6 @@ export class ModerationService {
               }
             }
           });
-
         } catch (error) {
           logger.error(
             `Error automatically removing expired timeout for ${member.user.tag}:`,
@@ -528,7 +714,8 @@ export class ModerationService {
       );
 
       if (!member.moderatable) {
-        const targetLabel = getTargetLabel(member);
+        const targetLabel =
+          getTargetLabel(member);
 
         throw new TitanBotError(
           'Cannot modify member',
@@ -538,7 +725,9 @@ export class ModerationService {
         );
       }
 
-      if (!member.isCommunicationDisabled()) {
+      if (
+        !member.isCommunicationDisabled()
+      ) {
         throw new TitanBotError(
           'User not timed out',
           ErrorTypes.VALIDATION,
@@ -546,19 +735,15 @@ export class ModerationService {
         );
       }
 
-      // Remove Discord timeout.
       await member.timeout(
         null,
         reason
       );
 
-      // ========================================================
-      // RESTORE THEIR OLD ROLES
-      // ========================================================
-
-      const restored = await restoreTimeoutRoles(
-        member
-      );
+      const restored =
+        await restoreTimeoutRoles(
+          member
+        );
 
       if (!restored) {
         logger.warn(
@@ -619,8 +804,11 @@ export class ModerationService {
         );
       }
 
-      const bans = await guild.bans.fetch();
-      const banInfo = bans.get(user.id);
+      const bans =
+        await guild.bans.fetch();
+
+      const banInfo =
+        bans.get(user.id);
 
       if (!banInfo) {
         throw new TitanBotError(
@@ -635,20 +823,21 @@ export class ModerationService {
         reason
       );
 
-      const caseId = await logModerationAction({
-        client: guild.client,
-        guild,
-        event: {
-          action: 'Member Unbanned',
-          target: `${user.tag} (${user.id})`,
-          executor: `${moderator.user.tag} (${moderator.id})`,
-          reason,
-          metadata: {
-            userId: user.id,
-            moderatorId: moderator.id
+      const caseId =
+        await logModerationAction({
+          client: guild.client,
+          guild,
+          event: {
+            action: 'Member Unbanned',
+            target: `${user.tag} (${user.id})`,
+            executor: `${moderator.user.tag} (${moderator.id})`,
+            reason,
+            metadata: {
+              userId: user.id,
+              moderatorId: moderator.id
+            }
           }
-        }
-      });
+        });
 
       logger.info(
         `User unbanned: ${user.tag} by ${moderator.user.tag} in ${guild.name}`
