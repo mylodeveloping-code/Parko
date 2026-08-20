@@ -32,7 +32,165 @@ const MODERATION_EXEMPT_IDS = new Set([
 ]);
 
 export function isModerationExempt(userId) {
-  return MODERATION_EXEMPT_IDS.has(String(userId));
+  return MODERATION_EXEMPT_IDS.has(
+    String(userId)
+  );
+}
+
+// ============================================================
+// MODERATION TARGET RESOLUTION
+// ============================================================
+
+/**
+ * Resolve a user ID into a GuildMember.
+ *
+ * IMPORTANT:
+ * Do NOT rely only on guild.members.cache.get().
+ *
+ * A member can be in the server without currently being
+ * present in the bot's local member cache.
+ *
+ * This function first checks the cache and then asks Discord
+ * for the member if necessary.
+ *
+ * @param {import('discord.js').Guild} guild
+ * @param {string} userId
+ * @returns {Promise<import('discord.js').GuildMember|null>}
+ */
+export async function resolveModerationTarget(
+  guild,
+  userId
+) {
+  if (!guild || !userId) {
+    return null;
+  }
+
+  const id =
+    String(userId).trim();
+
+  if (!/^\d{17,20}$/.test(id)) {
+    return null;
+  }
+
+  // Check cache first.
+  const cachedMember =
+    guild.members.cache.get(id);
+
+  if (cachedMember) {
+    return cachedMember;
+  }
+
+  // Fetch directly from Discord.
+  try {
+    const member =
+      await guild.members.fetch(id);
+
+    return member || null;
+  } catch (error) {
+    logger.debug(
+      `Unable to resolve member ${id} in guild ${guild.id}:`,
+      error
+    );
+
+    return null;
+  }
+}
+
+/**
+ * Resolve a Discord user by ID.
+ *
+ * This does NOT require the user to currently be in the server.
+ *
+ * Useful for:
+ * - Warn
+ * - View warnings
+ * - Ban
+ * - Unban
+ * - Case lookup
+ *
+ * @param {import('discord.js').Client} client
+ * @param {string} userId
+ * @returns {Promise<import('discord.js').User|null>}
+ */
+export async function resolveModerationUser(
+  client,
+  userId
+) {
+  if (!client || !userId) {
+    return null;
+  }
+
+  const id =
+    String(userId).trim();
+
+  if (!/^\d{17,20}$/.test(id)) {
+    return null;
+  }
+
+  try {
+    return await client.users.fetch(id);
+  } catch (error) {
+    logger.debug(
+      `Unable to resolve Discord user ${id}:`,
+      error
+    );
+
+    return null;
+  }
+}
+
+/**
+ * Resolve a moderation target.
+ *
+ * Returns both the User and GuildMember when possible.
+ *
+ * The important distinction is that the User can exist even
+ * when the person is not currently in the guild.
+ *
+ * @param {import('discord.js').Client} client
+ * @param {import('discord.js').Guild} guild
+ * @param {string} userId
+ */
+export async function resolveModerationTargetData(
+  client,
+  guild,
+  userId
+) {
+  const id =
+    String(userId ?? '').trim();
+
+  if (!id) {
+    return {
+      user: null,
+      member: null,
+      userId: null,
+      inGuild: false,
+    };
+  }
+
+  const member =
+    await resolveModerationTarget(
+      guild,
+      id
+    );
+
+  let user =
+    member?.user ?? null;
+
+  if (!user) {
+    user =
+      await resolveModerationUser(
+        client,
+        id
+      );
+  }
+
+  return {
+    user,
+    member,
+    userId: id,
+    inGuild: Boolean(member),
+  };
 }
 
 // ============================================================
@@ -211,8 +369,6 @@ export async function applyMutedRole(member) {
   }
 
   try {
-    // Remove every role except @everyone,
-    // managed roles, and the Muted role.
     const rolesToRemove =
       member.roles.cache.filter(
         role =>
@@ -228,7 +384,6 @@ export async function applyMutedRole(member) {
       );
     }
 
-    // Add Muted role if needed.
     if (
       !member.roles.cache.has(
         MUTED_ROLE_ID
@@ -272,7 +427,6 @@ export async function restoreTimeoutRoles(member) {
         `No saved timeout roles found for ${member.id} in guild ${member.guild.id}`
       );
 
-      // Still remove Muted if present.
       if (
         member.roles.cache.has(
           MUTED_ROLE_ID
@@ -304,7 +458,6 @@ export async function restoreTimeoutRoles(member) {
         }
       );
 
-    // Remove Muted first.
     if (
       member.roles.cache.has(
         MUTED_ROLE_ID
@@ -316,7 +469,6 @@ export async function restoreTimeoutRoles(member) {
       );
     }
 
-    // Restore original roles.
     if (
       rolesToRestore.length > 0
     ) {
@@ -326,7 +478,6 @@ export async function restoreTimeoutRoles(member) {
       );
     }
 
-    // Delete saved data.
     await deleteTimeoutRoles(
       member.guild.id,
       member.id
@@ -391,17 +542,6 @@ const MODERATION_NOTIFICATION_TEXT = {
 // SEND MODERATION NOTIFICATION
 // ============================================================
 
-/**
- * Sends a short public moderation notification.
- *
- * Example:
- *
- * @User has been banned | 123456789012345678
- *
- * The user mention and ID are automatically taken from
- * event.metadata.userId, so this works for whoever is
- * actually punished.
- */
 export async function sendModerationNotification({
   guild,
   event,
@@ -410,10 +550,6 @@ export async function sendModerationNotification({
     if (!guild || !event) {
       return false;
     }
-
-    // ========================================================
-    // GET THE ACTUAL USER BEING PUNISHED
-    // ========================================================
 
     const userId =
       event.metadata?.userId ||
@@ -428,16 +564,11 @@ export async function sendModerationNotification({
       return false;
     }
 
-    // Never announce exempt users.
     if (
       isModerationExempt(userId)
     ) {
       return false;
     }
-
-    // ========================================================
-    // GET ACTION TEXT
-    // ========================================================
 
     const actionText =
       MODERATION_NOTIFICATION_TEXT[
@@ -447,10 +578,6 @@ export async function sendModerationNotification({
     if (!actionText) {
       return false;
     }
-
-    // ========================================================
-    // FIND CHANNEL
-    // ========================================================
 
     const channel =
       guild.systemChannel;
@@ -475,22 +602,8 @@ export async function sendModerationNotification({
       return false;
     }
 
-    // ========================================================
-    // USER MENTION
-    // ========================================================
-
-    // Discord converts this into the actual user's mention.
-    //
-    // Example:
-    // <@123456789> -> @Username
-    //
-    // This is dynamically generated from the punished user's ID.
     const userMention =
       `<@${userId}>`;
-
-    // ========================================================
-    // BUILD EMBED
-    // ========================================================
 
     const embed =
       new EmbedBuilder()
@@ -499,7 +612,6 @@ export async function sendModerationNotification({
           `${userMention} **${actionText}** | ${userId}`
         );
 
-    // Show duration for timeouts.
     if (
       event.duration &&
       event.action ===
@@ -513,16 +625,11 @@ export async function sendModerationNotification({
       });
     }
 
-    // ========================================================
-    // SEND
-    // ========================================================
-
     await channel.send({
       embeds: [
         embed,
       ],
 
-      // Only mention the punished user.
       allowedMentions: {
         users: [
           String(userId),
@@ -537,8 +644,6 @@ export async function sendModerationNotification({
 
     return true;
   } catch (error) {
-    // A notification failure should NEVER make the
-    // actual moderation action fail.
     logger.error(
       `Error sending moderation notification for ${event?.action ?? 'unknown action'}:`,
       error
@@ -920,20 +1025,28 @@ export async function getModerationCases(
       caseList;
 
     if (userId) {
+      const normalizedUserId =
+        String(userId);
+
       filteredCases =
         filteredCases.filter(
           case_ =>
-            case_.targetUserId ===
-            userId
+            String(
+              case_.targetUserId
+            ) === normalizedUserId
         );
     }
 
     if (moderatorId) {
+      const normalizedModeratorId =
+        String(moderatorId);
+
       filteredCases =
         filteredCases.filter(
           case_ =>
-            case_.moderatorId ===
-            moderatorId
+            String(
+              case_.moderatorId
+            ) === normalizedModeratorId
         );
     }
 
@@ -975,20 +1088,29 @@ export async function logModerationAction({
   guild,
   event,
 }) {
+  if (!guild || !event) {
+    return null;
+  }
+
   const targetUserId =
     event.metadata?.userId ||
     event.targetUserId;
 
+  const normalizedTargetUserId =
+    targetUserId
+      ? String(targetUserId)
+      : null;
+
   // Never create a moderation case for exempt users.
   if (
-    targetUserId &&
+    normalizedTargetUserId &&
     isModerationExempt(
-      targetUserId
+      normalizedTargetUserId
     )
   ) {
     logger.info(
       `Moderation action ignored for exempt user ` +
-      `${targetUserId} in guild ${guild.id}`
+      `${normalizedTargetUserId} in guild ${guild.id}`
     );
 
     return null;
@@ -1033,10 +1155,15 @@ export async function logModerationAction({
       metadata:
         event.metadata,
 
-      targetUserId,
+      targetUserId:
+        normalizedTargetUserId,
 
       moderatorId:
-        event.metadata?.moderatorId,
+        event.metadata?.moderatorId
+          ? String(
+              event.metadata.moderatorId
+            )
+          : undefined,
     },
   });
 
@@ -1050,6 +1177,18 @@ export async function logModerationAction({
 
     event: {
       ...event,
+
+      metadata: {
+        ...(event.metadata || {}),
+
+        ...(normalizedTargetUserId
+          ? {
+              userId:
+                normalizedTargetUserId,
+            }
+          : {}),
+      },
+
       caseId,
     },
   });
@@ -1063,6 +1202,21 @@ export async function logModerationAction({
 
     event: {
       ...event,
+
+      metadata: {
+        ...(event.metadata || {}),
+
+        ...(normalizedTargetUserId
+          ? {
+              userId:
+                normalizedTargetUserId,
+            }
+          : {}),
+      },
+
+      targetUserId:
+        normalizedTargetUserId,
+
       caseId,
     },
   });
