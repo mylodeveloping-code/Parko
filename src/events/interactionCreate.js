@@ -54,16 +54,8 @@ import {
 } from '../utils/collectorComponents.js';
 
 import {
-    ResponseCoordinator,
-} from '../utils/responseCoordinator.js';
-
-import {
     enforceDefaultCommandPermissions,
 } from '../utils/permissionGuard.js';
-
-import {
-    InteractionHelper,
-} from '../utils/interactionHelper.js';
 
 import {
     isBlacklisted,
@@ -209,10 +201,34 @@ export default {
         interaction,
         client,
     ) {
-        const traceContext =
-            createInteractionTraceContext(
-                interaction,
+        // ========================================================
+        // TRACE CONTEXT
+        // ========================================================
+
+        let traceContext;
+
+        try {
+            traceContext =
+                createInteractionTraceContext(
+                    interaction,
+                );
+        } catch (error) {
+            logger.error(
+                'Failed to create interaction trace context:',
+                error,
             );
+
+            traceContext = {
+                traceId:
+                    interaction.id,
+                guildId:
+                    interaction.guildId,
+                userId:
+                    interaction.user?.id,
+                command:
+                    interaction.commandName,
+            };
+        }
 
         interaction.traceContext =
             traceContext;
@@ -221,87 +237,185 @@ export default {
             traceContext.traceId;
 
         // ========================================================
-        // BLACKLIST
+        // CRITICAL SLASH COMMAND ACKNOWLEDGEMENT
         // ========================================================
-
-        if (
-            interaction.user &&
-            isBlacklisted(
-                interaction.user.id,
-            )
-        ) {
-            if (
-                interaction.isChatInputCommand()
-            ) {
-                logger.info(
-                    `Blocked blacklisted user ${interaction.user.tag} (${interaction.user.id}) from using /${interaction.commandName}.`,
-                );
-
-                await respondToBlacklistedUser(
-                    interaction,
-                );
-
-                return;
-            }
-
-            if (
-                interaction.isAutocomplete() ||
-                interaction.isButton() ||
-                interaction.isStringSelectMenu() ||
-                interaction.isModalSubmit()
-            ) {
-                await respondToBlacklistedUser(
-                    interaction,
-                );
-
-                return;
-            }
-        }
-
-        // ========================================================
-        // OWNER-ONLY BLACKLIST COMMANDS
-        // ========================================================
+        //
+        // A slash command MUST be acknowledged within Discord's
+        // interaction timeout.
+        //
+        // This is intentionally done BEFORE:
+        //
+        // - blacklist checks
+        // - command lookup
+        // - trace wrapper execution
+        // - database access
+        // - permissions
+        // - cooldowns
+        // - abuse protection
+        //
+        // This prevents ANY shared middleware failure from causing
+        // "This application did not respond".
+        //
 
         if (
             interaction.isChatInputCommand() &&
-            BLACKLIST_MANAGEMENT_COMMANDS.has(
-                interaction.commandName
-                    ?.toLowerCase(),
-            ) &&
-            interaction.user.id !==
-                BLACKLIST_OWNER_ID
+            !interaction.replied &&
+            !interaction.deferred
         ) {
+            const commandName =
+                String(
+                    interaction.commandName ||
+                        '',
+                ).toLowerCase();
+
             try {
-                await interaction.reply({
-                    embeds: [
-                        {
-                            title:
-                                '⛔ Permission Denied',
+                await interaction.deferReply();
 
-                            description:
-                                'Only the bot developer can use the blacklist and unblacklist commands.',
-
-                            color: 0xff0000,
-                        },
-                    ],
-
-                    flags:
-                        MessageFlags.Ephemeral,
-                });
+                logger.info(
+                    `✅ Acknowledged /${commandName} immediately.`,
+                );
             } catch (error) {
                 logger.error(
-                    'Failed to send blacklist permission response:',
-                    error,
-                );
-            }
+                    `❌ Failed to acknowledge /${commandName}:`,
+                    {
+                        error:
+                            error?.stack ||
+                            error?.message ||
+                            error,
 
-            return;
+                        interactionId:
+                            interaction.id,
+
+                        guildId:
+                            interaction.guildId,
+
+                        userId:
+                            interaction.user?.id,
+                    },
+                );
+
+                return;
+            }
         }
+
+        // ========================================================
+        // MAIN INTERACTION HANDLER
+        // ========================================================
 
         return runWithTraceContext(
             traceContext,
             async () => {
                 try {
+                    // ==================================================
+                    // BLACKLIST
+                    // ==================================================
+
+                    try {
+                        if (
+                            interaction.user &&
+                            isBlacklisted(
+                                interaction.user.id,
+                            )
+                        ) {
+                            if (
+                                interaction.isChatInputCommand()
+                            ) {
+                                logger.info(
+                                    `Blocked blacklisted user ${interaction.user.tag} (${interaction.user.id}) from using /${interaction.commandName}.`,
+                                );
+
+                                await respondToBlacklistedUser(
+                                    interaction,
+                                );
+
+                                return;
+                            }
+
+                            if (
+                                interaction.isAutocomplete() ||
+                                interaction.isButton() ||
+                                interaction.isStringSelectMenu() ||
+                                interaction.isModalSubmit()
+                            ) {
+                                await respondToBlacklistedUser(
+                                    interaction,
+                                );
+
+                                return;
+                            }
+                        }
+                    } catch (error) {
+                        logger.error(
+                            'Blacklist check failed:',
+                            error,
+                        );
+
+                        // Do not allow a blacklist-system failure
+                        // to prevent a slash command from responding.
+                    }
+
+                    // ==================================================
+                    // OWNER-ONLY BLACKLIST COMMANDS
+                    // ==================================================
+
+                    if (
+                        interaction.isChatInputCommand() &&
+                        BLACKLIST_MANAGEMENT_COMMANDS.has(
+                            interaction.commandName
+                                ?.toLowerCase(),
+                        ) &&
+                        interaction.user.id !==
+                            BLACKLIST_OWNER_ID
+                    ) {
+                        try {
+                            if (
+                                interaction.deferred &&
+                                !interaction.replied
+                            ) {
+                                await interaction.editReply({
+                                    embeds: [
+                                        {
+                                            title:
+                                                '⛔ Permission Denied',
+
+                                            description:
+                                                'Only the bot developer can use the blacklist and unblacklist commands.',
+
+                                            color: 0xff0000,
+                                        },
+                                    ],
+                                });
+                            } else if (
+                                !interaction.replied
+                            ) {
+                                await interaction.reply({
+                                    embeds: [
+                                        {
+                                            title:
+                                                '⛔ Permission Denied',
+
+                                            description:
+                                                'Only the bot developer can use the blacklist and unblacklist commands.',
+
+                                            color: 0xff0000,
+                                        },
+                                    ],
+
+                                    flags:
+                                        MessageFlags.Ephemeral,
+                                });
+                            }
+
+                        } catch (error) {
+                            logger.error(
+                                'Failed to send blacklist permission response:',
+                                error,
+                            );
+                        }
+
+                        return;
+                    }
+
                     // ==================================================
                     // CHAT INPUT / SLASH COMMAND
                     // ==================================================
@@ -318,38 +432,6 @@ export default {
                         logger.info(
                             `📥 Received slash command /${commandName} from ${interaction.user?.tag || interaction.user?.id}.`,
                         );
-
-                        // ==================================================
-                        // IMMEDIATE ACKNOWLEDGEMENT
-                        // ==================================================
-                        //
-                        // Every slash command gets acknowledged here.
-                        // This happens BEFORE command lookup, config,
-                        // permissions, cooldowns, database work, etc.
-                        //
-
-                        if (
-                            !interaction.replied &&
-                            !interaction.deferred
-                        ) {
-                            try {
-                                await interaction.deferReply({
-                                    flags:
-                                        MessageFlags.Ephemeral,
-                                });
-
-                                logger.info(
-                                    `✅ Acknowledged /${commandName}.`,
-                                );
-                            } catch (error) {
-                                logger.error(
-                                    `❌ Failed to acknowledge /${commandName}:`,
-                                    error,
-                                );
-
-                                return;
-                            }
-                        }
 
                         // ==================================================
                         // FIND COMMAND
@@ -979,6 +1061,29 @@ export default {
                             'Failed to send fallback error response:',
                             replyError,
                         );
+
+                        // Last-resort fallback for slash commands.
+                        // At this point the interaction should already
+                        // be deferred, so editReply is the correct API.
+                        if (
+                            interaction.isChatInputCommand() &&
+                            interaction.deferred &&
+                            !interaction.replied
+                        ) {
+                            try {
+                                await interaction.editReply({
+                                    content:
+                                        '❌ An unexpected error occurred while processing this command.',
+                                });
+                            } catch (
+                                finalReplyError
+                            ) {
+                                logger.error(
+                                    'Final interaction fallback failed:',
+                                    finalReplyError,
+                                );
+                            }
+                        }
                     }
                 }
             },
