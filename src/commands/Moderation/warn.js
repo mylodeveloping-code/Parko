@@ -1,11 +1,7 @@
-import { EmbedBuilder } from 'discord.js';
-
 import {
     SlashCommandBuilder,
     PermissionFlagsBits,
 } from 'discord.js';
-
-import { getColor } from '../../config/bot.js';
 
 import {
     createEmbed,
@@ -40,47 +36,6 @@ const WARNING_ROLES = {
 
 const THIRTY_DAYS =
     30 * 24 * 60 * 60 * 1000;
-
-// ============================================================
-// CLEAN WARNING EMBEDS
-// ============================================================
-//
-// These deliberately build the embed locally instead of using
-// the older branded successEmbed()/warningEmbed() helpers.
-// That prevents the old "Parko" branding from appearing here.
-// ============================================================
-
-function cleanSuccessEmbed(
-    title,
-    description
-) {
-    return new EmbedBuilder()
-        .setColor(
-            getColor('success')
-        )
-        .setTitle(
-            `✅ ${title}`
-        )
-        .setDescription(
-            description
-        );
-}
-
-function cleanWarningEmbed(
-    title,
-    description
-) {
-    return new EmbedBuilder()
-        .setColor(
-            getColor('warning')
-        )
-        .setTitle(
-            title
-        )
-        .setDescription(
-            description
-        );
-}
 
 export default {
     data:
@@ -239,16 +194,12 @@ export default {
             );
 
         /*
-         * IMPORTANT:
+         * Warning does NOT use the normal moderation hierarchy
+         * restriction here.
          *
-         * There is intentionally NO moderation-hierarchy check
-         * here.
-         *
-         * Warnings are stored in the warning database and do not
-         * require the bot to modify the target's permissions,
-         * timeout, kick, or role hierarchy.
-         *
-         * This allows the server owner to receive warnings too.
+         * This allows the server owner to receive a warning.
+         * Discord simply prevents the later ban when the user is
+         * the server owner.
          */
 
         const isServerOwner =
@@ -368,9 +319,9 @@ export default {
             false;
 
         /*
-         * Discord does not allow a server owner to be banned.
+         * Discord does not allow the server owner to be banned.
          *
-         * The warning itself is still recorded.
+         * The warning is still recorded normally.
          */
         if (
             totalCount === 3 &&
@@ -522,9 +473,7 @@ export default {
                             }
                         )
                         .setColor(
-                            getColor(
-                                'error'
-                            )
+                            0xed4245
                         );
             } else {
                 warningDM =
@@ -559,9 +508,7 @@ export default {
                             }
                         )
                         .setColor(
-                            getColor(
-                                'warning'
-                            )
+                            0xfee75c
                         );
             }
 
@@ -669,44 +616,22 @@ export default {
             },
         });
 
-        // ========================================================
-        // SUCCESS RESPONSE
-        // ========================================================
-
-        let description =
-            `**Reason:** ${reason}\n` +
-            `**Warning #:** ${totalCount}`;
-
-        if (
-            isServerOwner
-        ) {
-            description +=
-                '\n\n⚠️ This user is the server owner, so Discord will not allow the 30-day ban.';
-        } else if (
-            totalCount === 3 &&
-            wasBanned
-        ) {
-            description +=
-                '\n\n🔨 **This was their third warning. They have been banned for 30 days.**';
-        }
-
-        if (
-            !warningRolesUpdated
-        ) {
-            description +=
-                '\n\n⚠️ The warning was recorded, but the warning roles could not be updated.';
-        }
-
-        await InteractionHelper.safeEditReply(
-            interaction,
-            {
-                embeds: [
-                    cleanSuccessEmbed(
-                        `Warned ${target.tag}`,
-                        description
-                    ),
-                ],
-            }
-        );
+        /*
+         * IMPORTANT:
+         *
+         * There is intentionally NO interaction reply here.
+         *
+         * logModerationAction() already sends the one public
+         * moderation notification to the command channel.
+         *
+         * This prevents the command from producing both:
+         *
+         *   @Astro has been warned. | ID
+         *
+         * and
+         *
+         *   Warned astrosnake4055
+         *
+         */
     },
 };
