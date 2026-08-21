@@ -1,11 +1,8 @@
 import {
     SlashCommandBuilder,
     PermissionFlagsBits,
+    EmbedBuilder,
 } from 'discord.js';
-
-import {
-    successEmbed,
-} from '../../utils/embeds.js';
 
 import {
     logger,
@@ -159,17 +156,18 @@ export default {
         // RESPONSE
         // ====================================================
 
-await InteractionHelper.safeEditReply(
-    interaction,
-    {
-        embeds: [
-            successEmbed(
-                '',
-                `<@${targetUser.id}> has been unmuted. | ${targetUser.id}`
-            ),
-        ],
-    }
-);
+        await InteractionHelper.safeEditReply(
+            interaction,
+            {
+                embeds: [
+                    new EmbedBuilder()
+                        .setColor(0x57F287)
+                        .setDescription(
+                            `<@${targetUser.id}> has been unmuted. | ${targetUser.id}`
+                        ),
+                ],
+            }
+        );
 
         logger.info(
             `Removed timeout from ${targetUser.tag}`,
