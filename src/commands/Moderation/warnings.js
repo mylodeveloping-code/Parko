@@ -33,8 +33,13 @@ import {
 // ============================================================
 
 const WARNING_ROLE_IDS = [
+    // Warning 1
     '1537643745720148018',
+
+    // Warning 2
     '1533577410367455242',
+
+    // Warning 3
     '1536917870087376936',
 ];
 
@@ -140,6 +145,7 @@ async function removeAllWarningRoles(
                 continue;
             }
 
+            // User does not have this warning role.
             if (
                 !member.roles.cache.has(
                     roleId
@@ -148,6 +154,7 @@ async function removeAllWarningRoles(
                 continue;
             }
 
+            // Bot cannot manage this role.
             if (
                 !role.editable
             ) {
@@ -525,7 +532,7 @@ export default {
                         await buttonInteraction.deferUpdate();
 
                         // ==================================================
-                        // CLEAR WARNING ROLES
+                        // CLEAR ALL WARNING ROLES
                         // ==================================================
 
                         const roleResult =
@@ -663,6 +670,7 @@ export default {
                                     '❌ I could not remove the warning roles from this user.',
 
                                 embeds: [],
+
                                 components: [],
                             })
                             .catch(
