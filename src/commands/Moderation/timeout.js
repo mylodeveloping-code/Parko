@@ -333,25 +333,11 @@ async function resolvePrefixTarget(
 
 function createTimeoutEmbed({
     userId,
-    duration,
-    reason,
 }) {
     return new EmbedBuilder()
         .setColor(0xFEE75C)
         .setDescription(
             `<@${userId}> has been timed out. | ${userId}`
-        )
-        .addFields(
-            {
-                name: 'Duration',
-                value: duration,
-                inline: true,
-            },
-            {
-                name: 'Reason',
-                value: reason,
-                inline: true,
-            }
         );
 }
 
