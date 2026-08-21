@@ -1,5 +1,4 @@
 import { buildUserErrorEmbed } from './embeds.js';
-import { logger } from './logger.js';
 
 function getCommandJson(commandData) {
     if (commandData?.data) {
@@ -22,51 +21,41 @@ export function buildPrefixUsage(
         getCommandJson(commandData);
 
     const usageParts = [
-        `${prefix}${commandJson.name}`,
+        `${prefix}${commandJson?.name || ''}`,
     ];
 
     if (commandData?.usage) {
-        usageParts.push(
-            commandData.usage,
-        );
+        usageParts.push(commandData.usage);
 
         return usageParts
             .filter(Boolean)
             .join(' ');
     }
 
-    if (
-        validation.subcommandGroupName
-    ) {
+    if (validation?.subcommandGroupName) {
         usageParts.push(
             validation.subcommandGroupName,
         );
     }
 
-    if (
-        validation.subcommandName
-    ) {
+    if (validation?.subcommandName) {
         usageParts.push(
             validation.subcommandName,
         );
     } else if (
-        !validation.subcommandGroupName &&
-        commandJson.options?.some(
-            opt => opt.type === 1,
+        !validation?.subcommandGroupName &&
+        commandJson?.options?.some(
+            (option) => option.type === 1,
         )
     ) {
-        usageParts.push(
-            '[subcommand]',
-        );
+        usageParts.push('[subcommand]');
     }
 
-    const optionDefs =
-        validation.optionDefs || [];
-
-    for (const option of optionDefs) {
-        usageParts.push(
-            `[${option.name}]`,
-        );
+    for (
+        const option
+        of validation?.optionDefs || []
+    ) {
+        usageParts.push(`[${option.name}]`);
     }
 
     return usageParts
@@ -77,33 +66,20 @@ export function buildPrefixUsage(
 export class ResponseCoordinator {
     constructor(
         interaction,
-        {
-            message = null,
-        } = {},
+        { message = null } = {},
     ) {
-        this.interaction =
-            interaction;
-
-        this.message =
-            message;
-
-        this._replyMessage =
-            null;
-
-        this._finalized =
-            false;
-
-        this._finalizedReason =
-            null;
+        this.interaction = interaction;
+        this.message = message;
+        this._replyMessage = null;
+        this._finalized = false;
+        this._finalizedReason = null;
     }
 
     static attach(
         interaction,
         options = {},
     ) {
-        if (
-            interaction._responseCoordinator
-        ) {
+        if (interaction._responseCoordinator) {
             return interaction._responseCoordinator;
         }
 
@@ -119,13 +95,24 @@ export class ResponseCoordinator {
         return coordinator;
     }
 
+    isPrefixInteraction() {
+        return Boolean(
+            this.interaction._isPrefixCommand,
+        );
+    }
+
     hasResponded() {
-        return (
-            this._finalized ||
-            !!this._replyMessage ||
-            !!this.interaction._replyMessage ||
+        if (this.isPrefixInteraction()) {
+            return Boolean(
+                this._replyMessage ||
+                this.interaction._replyMessage ||
+                this.interaction.replied,
+            );
+        }
+
+        return Boolean(
             this.interaction.replied ||
-            this.interaction.deferred
+            this.interaction.deferred,
         );
     }
 
@@ -137,14 +124,8 @@ export class ResponseCoordinator {
     }
 
     markFinalized(reason) {
-        this._finalized =
-            true;
-
-        this._finalizedReason =
-            reason;
-
-        this.interaction.replied =
-            true;
+        this._finalized = true;
+        this._finalizedReason = reason;
     }
 
     getReplyMessage() {
@@ -155,72 +136,52 @@ export class ResponseCoordinator {
         );
     }
 
-    setReplyMessage(
-        sentMessage,
-    ) {
-        this._replyMessage =
-            sentMessage;
+    setReplyMessage(message) {
+        this._replyMessage = message;
 
         this.interaction._replyMessage =
-            sentMessage;
-    }
+            message;
 
-    isPrefixInteraction() {
-        return Boolean(
-            this.interaction._isPrefixCommand ||
-            this.message?.channel,
-        );
-    }
-
-    async sendPrefixPayload(
-        payload,
-    ) {
-        if (
-            !this.message?.channel
-        ) {
-            return null;
-        }
-
-        const sentMessage =
-            await this.message.channel.send(
-                payload,
-            );
-
-        this.setReplyMessage(
-            sentMessage,
-        );
-
-        return sentMessage;
+        this.interaction.replied = true;
     }
 
     async deferLocal() {
-        this.interaction.deferred =
-            true;
+        if (this.isPrefixInteraction()) {
+            this.interaction.deferred = true;
+        }
 
         return true;
     }
 
+    async sendPrefixPayload(payload) {
+        if (!this.message?.channel) {
+            throw new Error(
+                'Prefix command has no message channel.',
+            );
+        }
+
+        const sent =
+            await this.message.channel.send(
+                payload,
+            );
+
+        this.setReplyMessage(sent);
+
+        return sent;
+    }
+
     async respond(payload) {
-        if (
-            this.isUsageFinalized()
-        ) {
+        if (this.isUsageFinalized()) {
             return this.getReplyMessage();
         }
 
-        const existing =
-            this.getReplyMessage();
+        if (this.isPrefixInteraction()) {
+            const existing =
+                this.getReplyMessage();
 
-        if (existing) {
-            return this.edit(payload);
-        }
-
-        // Prefix commands always respond in
-        // the originating message channel.
-        if (
-            this.isPrefixInteraction()
-        ) {
-            this.interaction.replied =
-                true;
+            if (existing) {
+                return this.edit(payload);
+            }
 
             return this.sendPrefixPayload(
                 payload,
@@ -228,13 +189,20 @@ export class ResponseCoordinator {
         }
 
         if (
-            this.interaction.deferred
+            this.interaction.deferred &&
+            !this.interaction.replied
         ) {
             await this.interaction.editReply(
                 payload,
             );
 
             return null;
+        }
+
+        if (this.interaction.replied) {
+            return this.interaction.followUp(
+                payload,
+            );
         }
 
         await this.interaction.reply(
@@ -245,40 +213,33 @@ export class ResponseCoordinator {
     }
 
     async edit(payload) {
-        if (
-            this.isUsageFinalized()
-        ) {
+        if (this.isUsageFinalized()) {
             return this.getReplyMessage();
         }
 
-        const existing =
-            this.getReplyMessage();
+        if (this.isPrefixInteraction()) {
+            const existing =
+                this.getReplyMessage();
 
-        if (existing) {
-            try {
-                return await existing.edit(
-                    payload,
-                );
-            } catch (error) {
-                logger.debug(
-                    `ResponseCoordinator edit failed: ${error.message}`,
-                );
+            if (existing) {
+                try {
+                    const edited =
+                        await existing.edit(
+                            payload,
+                        );
 
-                if (
-                    this.isPrefixInteraction()
-                ) {
+                    this.setReplyMessage(
+                        edited,
+                    );
+
+                    return edited;
+                } catch {
                     return this.sendPrefixPayload(
                         payload,
                     );
                 }
-
-                throw error;
             }
-        }
 
-        if (
-            this.isPrefixInteraction()
-        ) {
             return this.sendPrefixPayload(
                 payload,
             );
@@ -295,15 +256,11 @@ export class ResponseCoordinator {
             return null;
         }
 
-        return this.respond(
-            payload,
-        );
+        return this.respond(payload);
     }
 
     async followUp(payload) {
-        if (
-            this.isPrefixInteraction()
-        ) {
+        if (this.isPrefixInteraction()) {
             return this.message.channel.send(
                 payload,
             );
@@ -314,9 +271,7 @@ export class ResponseCoordinator {
         );
     }
 
-    async respondUsage(
-        usageLine,
-    ) {
+    async respondUsage(usageLine) {
         const embed =
             buildUserErrorEmbed(
                 'validation',
@@ -332,9 +287,7 @@ export class ResponseCoordinator {
                 embeds: [embed],
             });
 
-        this.markFinalized(
-            'usage',
-        );
+        this.markFinalized('usage');
 
         return result;
     }
