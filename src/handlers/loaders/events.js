@@ -1,88 +1,94 @@
 import { readdir } from 'fs/promises';
 import { join } from 'path';
-import { fileURLToPath, pathToFileURL } from 'url';
+import {
+    fileURLToPath,
+    pathToFileURL,
+} from 'url';
 import { dirname } from 'path';
-import { Events } from 'discord.js';
+
 import { logger } from '../../utils/logger.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+const __filename =
+    fileURLToPath(import.meta.url);
 
-const REQUIRED_COMMAND_EVENTS = new Set([
-    Events.InteractionCreate,
-    Events.MessageCreate,
-]);
+const __dirname =
+    dirname(__filename);
 
 export default async function loadEvents(client) {
-    const eventsPath = join(
-        __dirname,
-        '../../events',
-    );
+    const eventsPath =
+        join(
+            __dirname,
+            '../../events'
+        );
 
     let eventFiles;
 
     try {
-        const entries = await readdir(
-            eventsPath,
-            {
-                withFileTypes: true,
-            },
-        );
-
-        eventFiles = entries
-            .filter(
-                entry =>
-                    entry.isFile() &&
-                    entry.name.endsWith('.js'),
-            )
-            .map(
-                entry => entry.name,
+        const entries =
+            await readdir(
+                eventsPath,
+                {
+                    withFileTypes: true,
+                }
             );
+
+        eventFiles =
+            entries
+                .filter(
+                    entry =>
+                        entry.isFile() &&
+                        entry.name.endsWith('.js')
+                )
+                .map(
+                    entry =>
+                        entry.name
+                );
     } catch (error) {
         logger.error(
-            `❌ Failed to read events directory: ${eventsPath}`,
-            error?.stack ||
+            `❌ Failed to read events directory "${eventsPath}": ${
+                error?.stack ||
                 error?.message ||
-                error,
+                String(error)
+            }`
         );
 
         throw error;
     }
 
     logger.info(
-        `Found ${eventFiles.length} event files to load`,
+        `Found ${eventFiles.length} event files to load`
     );
 
     /*
-     * ------------------------------------------------------------
-     * Remove old command-event listeners.
+     * We only remove the two command-related events here.
      *
-     * This prevents duplicate interaction/message handlers from
-     * surviving a reload and causing multiple responses.
-     * ------------------------------------------------------------
+     * This prevents duplicate handlers without disturbing any
+     * other Discord listeners that may have been installed
+     * elsewhere during startup.
      */
 
     client.removeAllListeners(
-        Events.InteractionCreate,
+        'interactionCreate'
     );
 
     client.removeAllListeners(
-        Events.MessageCreate,
+        'messageCreate'
     );
 
-    const registeredEvents = new Set();
+    let loadedCount = 0;
 
     for (const file of eventFiles) {
-        const filePath = join(
-            eventsPath,
-            file,
-        );
+        const filePath =
+            join(
+                eventsPath,
+                file
+            );
 
         try {
             const module =
                 await import(
                     pathToFileURL(
-                        filePath,
+                        filePath
                     ).href
                 );
 
@@ -95,45 +101,27 @@ export default async function loadEvents(client) {
                 typeof event.execute !==
                     'function'
             ) {
-                throw new Error(
-                    `Event ${file} is missing required "name" or "execute" properties.`,
+                logger.warn(
+                    `⚠️ Event ${file} is missing required "name" or "execute" properties.`
                 );
-            }
 
-            /*
-             * ----------------------------------------------------
-             * Event wrapper
-             * ----------------------------------------------------
-             *
-             * Your event files use:
-             *
-             *   execute(interaction, client)
-             *
-             * or:
-             *
-             *   execute(message, client)
-             *
-             * Therefore the client is appended as the final
-             * argument.
-             */
+                continue;
+            }
 
             const safeExecute =
                 async (...args) => {
                     try {
-                        logger.debug(
-                            `📡 Discord event fired: ${event.name}`,
-                        );
-
                         await event.execute(
                             ...args,
-                            client,
+                            client
                         );
                     } catch (error) {
                         logger.error(
-                            `❌ Error executing event ${event.name}:`,
-                            error?.stack ||
+                            `❌ Error executing event ${event.name}: ${
+                                error?.stack ||
                                 error?.message ||
-                                error,
+                                String(error)
+                            }`
                         );
                     }
                 };
@@ -141,91 +129,93 @@ export default async function loadEvents(client) {
             if (event.once) {
                 client.once(
                     event.name,
-                    safeExecute,
+                    safeExecute
                 );
 
                 logger.info(
-                    `✅ Registered once event: ${event.name} (${file})`,
+                    `✅ Registered once event: ${event.name} (${file})`
                 );
             } else {
                 client.on(
                     event.name,
-                    safeExecute,
+                    safeExecute
                 );
 
                 logger.info(
-                    `✅ Registered event: ${event.name} (${file})`,
+                    `✅ Registered event: ${event.name} (${file})`
                 );
             }
 
-            registeredEvents.add(
-                event.name,
-            );
+            loadedCount += 1;
         } catch (error) {
-            logger.error(
-                `❌ Failed to load event ${file}:`,
+            /*
+             * IMPORTANT:
+             *
+             * Put the COMPLETE import error directly into the
+             * log string. Your logger currently isn't reliably
+             * printing errors passed as a second argument here.
+             */
+            const errorText =
                 error?.stack ||
-                    error?.message ||
-                    error,
+                error?.message ||
+                String(error);
+
+            logger.error(
+                `❌ ERROR IMPORTING EVENT ${file}\n${errorText}`
             );
 
             /*
-             * Event-loading failures are fatal.
-             *
-             * It is much better to stop startup than to have the
-             * bot appear online while command events are missing.
+             * Do not silently continue for interactionCreate or
+             * messageCreate. Those are required for commands.
              */
-            throw error;
+            if (
+                file === 'interactionCreate.js' ||
+                file === 'messageCreate.js'
+            ) {
+                throw error;
+            }
+
+            logger.warn(
+                `⚠️ Skipping failed optional event: ${file}`
+            );
         }
     }
 
-    /*
-     * ------------------------------------------------------------
-     * Verify the two events responsible for commands.
-     * ------------------------------------------------------------
-     */
-
     const interactionListeners =
         client.listenerCount(
-            Events.InteractionCreate,
+            'interactionCreate'
         );
 
     const messageListeners =
         client.listenerCount(
-            Events.MessageCreate,
+            'messageCreate'
         );
 
     logger.info(
-        `📡 interactionCreate listeners: ${interactionListeners}`,
+        `📡 interactionCreate listeners: ${interactionListeners}`
     );
 
     logger.info(
-        `📡 messageCreate listeners: ${messageListeners}`,
+        `📡 messageCreate listeners: ${messageListeners}`
     );
 
     if (
-        !registeredEvents.has(
-            Events.InteractionCreate,
-        ) ||
-        interactionListeners < 1
+        interactionListeners === 0
     ) {
         throw new Error(
-            'CRITICAL: interactionCreate is not registered. Slash commands cannot work.',
+            'interactionCreate.js loaded but registered 0 interactionCreate listeners.'
         );
     }
 
     if (
-        !registeredEvents.has(
-            Events.MessageCreate,
-        ) ||
-        messageListeners < 1
+        messageListeners === 0
     ) {
         throw new Error(
-            'CRITICAL: messageCreate is not registered. Prefix commands cannot work.',
+            'messageCreate.js loaded but registered 0 messageCreate listeners.'
         );
     }
 
     logger.info(
-        '✅ interactionCreate and messageCreate are both registered.',
+        `✅ Event loading complete: ${loadedCount}/${eventFiles.length} events registered.`
     );
 }
