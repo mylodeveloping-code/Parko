@@ -161,13 +161,26 @@ async function respondToBlacklistedUser(interaction) {
 }
 
 // ============================================================
-// IMMEDIATE MUSIC DEFER
+// IMMEDIATE SLASH COMMAND DEFER
 // ============================================================
+//
+// Every slash command must be acknowledged immediately.
+// Discord only gives the bot a few seconds to acknowledge
+// an interaction.
+//
+// Previously this was only done for /play, which meant that
+// every other slash command could expire while the bot was
+// performing blacklist checks, guild config loading,
+// permission checks, abuse protection, etc.
+//
+// We now defer EVERY slash command immediately.
+//
 
-async function immediatelyDeferPlayInteraction(interaction) {
+async function immediatelyDeferChatInputInteraction(
+    interaction,
+) {
     if (
-        !interaction?.isChatInputCommand?.() ||
-        interaction.commandName !== 'play'
+        !interaction?.isChatInputCommand?.()
     ) {
         return false;
     }
@@ -179,14 +192,17 @@ async function immediatelyDeferPlayInteraction(interaction) {
         return true;
     }
 
+    const commandName =
+        interaction.commandName || 'unknown';
+
     const start = Date.now();
 
     console.log(
-        `[INTERACTION DEBUG] Received /play | ID: ${interaction.id}`,
+        `[INTERACTION DEBUG] Received /${commandName} | ID: ${interaction.id}`,
     );
 
     console.log(
-        `[INTERACTION DEBUG] Attempting immediate defer for /play...`,
+        `[INTERACTION DEBUG] Attempting immediate defer for /${commandName}...`,
     );
 
     try {
@@ -194,27 +210,29 @@ async function immediatelyDeferPlayInteraction(interaction) {
             flags: MessageFlags.Ephemeral,
         });
 
-        const elapsed = Date.now() - start;
+        const elapsed =
+            Date.now() - start;
 
         console.log(
-            `[INTERACTION DEBUG] /play successfully deferred in ${elapsed}ms.`,
+            `[INTERACTION DEBUG] /${commandName} successfully deferred in ${elapsed}ms.`,
         );
 
         logger.info(
-            `[Music] /play interaction deferred immediately in ${elapsed}ms.`,
+            `[Interaction] /${commandName} interaction deferred immediately in ${elapsed}ms.`,
         );
 
         return true;
     } catch (error) {
-        const elapsed = Date.now() - start;
+        const elapsed =
+            Date.now() - start;
 
         console.error(
-            `[INTERACTION DEBUG] /play DEFER FAILED after ${elapsed}ms:`,
+            `[INTERACTION DEBUG] /${commandName} DEFER FAILED after ${elapsed}ms:`,
             error,
         );
 
         logger.error(
-            `[Music] Failed to immediately defer /play after ${elapsed}ms:`,
+            `[Interaction] Failed to immediately defer /${commandName} after ${elapsed}ms:`,
             error,
         );
 
@@ -240,16 +258,20 @@ export default {
             interactionTraceContext.traceId;
 
         // ========================================================
-        // IMMEDIATELY ACKNOWLEDGE /PLAY
+        // IMMEDIATELY ACKNOWLEDGE ALL SLASH COMMANDS
         //
         // This MUST happen before blacklist checks, guild config,
         // abuse protection, permissions, command access, etc.
         // ========================================================
 
-        const playWasDeferred =
-            await immediatelyDeferPlayInteraction(
-                interaction,
-            );
+        let commandWasDeferred = false;
+
+        if (interaction.isChatInputCommand()) {
+            commandWasDeferred =
+                await immediatelyDeferChatInputInteraction(
+                    interaction,
+                );
+        }
 
         // ========================================================
         // BLACKLIST
@@ -300,18 +322,35 @@ export default {
                 BLACKLIST_OWNER_ID
         ) {
             try {
-                await interaction.reply({
-                    embeds: [
-                        {
-                            title:
-                                '⛔ Permission Denied',
-                            description:
-                                'Only the bot developer can use the blacklist and unblacklist commands.',
-                            color: 0xff0000,
-                        },
-                    ],
-                    flags: MessageFlags.Ephemeral,
-                });
+                if (
+                    interaction.deferred &&
+                    !interaction.replied
+                ) {
+                    await interaction.editReply({
+                        embeds: [
+                            {
+                                title:
+                                    '⛔ Permission Denied',
+                                description:
+                                    'Only the bot developer can use the blacklist and unblacklist commands.',
+                                color: 0xff0000,
+                            },
+                        ],
+                    });
+                } else {
+                    await interaction.reply({
+                        embeds: [
+                            {
+                                title:
+                                    '⛔ Permission Denied',
+                                description:
+                                    'Only the bot developer can use the blacklist and unblacklist commands.',
+                                color: 0xff0000,
+                            },
+                        ],
+                        flags: MessageFlags.Ephemeral,
+                    });
+                }
             } catch (error) {
                 logger.error(
                     'Failed to send blacklist permission response:',
@@ -360,15 +399,12 @@ export default {
                         );
 
                         // ==================================================
-                        // /PLAY WAS ALREADY ACKNOWLEDGED
+                        // COMMAND WAS ALREADY ACKNOWLEDGED
                         // ==================================================
 
-                        if (
-                            commandName === 'play' &&
-                            playWasDeferred
-                        ) {
+                        if (commandWasDeferred) {
                             logger.info(
-                                `[Music] /play already acknowledged before command checks.`,
+                                `[Interaction] /${commandName} already acknowledged before command checks.`,
                             );
                         }
 
@@ -896,10 +932,6 @@ export default {
                     if (
                         interaction.isModalSubmit()
                     ) {
-                        // ====================================================
-                        // MUSIC SEEK MODAL
-                        // ====================================================
-
                         if (
                             interaction.customId ===
                             'music_seek_modal'
@@ -912,10 +944,6 @@ export default {
                             return;
                         }
 
-                        // ====================================================
-                        // APPLICATION MODAL
-                        // ====================================================
-
                         if (
                             interaction.customId.startsWith(
                                 'app_modal_',
@@ -927,10 +955,6 @@ export default {
 
                             return;
                         }
-
-                        // ====================================================
-                        // COLLECTOR / SPECIAL MODALS
-                        // ====================================================
 
                         if (
                             interaction.customId.startsWith(

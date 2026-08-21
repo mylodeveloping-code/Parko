@@ -41,10 +41,6 @@ function sanitizeEditReplyOptions(
         ...rest
     } = options;
 
-    /*
-     * Do not pass ephemeral to editReply().
-     * Discord only accepts flags for special component modes.
-     */
     if (
         flags &&
         (flags &
@@ -106,13 +102,6 @@ export class InteractionHelper {
                     interaction,
                 );
 
-            /*
-             * Normal Discord slash commands should use
-             * Discord's native interaction response.
-             *
-             * Prefix commands are the only ones that need
-             * the ResponseCoordinator.
-             */
             if (
                 coordinator?.isUsageFinalized()
             ) {
