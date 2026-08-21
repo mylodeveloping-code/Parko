@@ -25,7 +25,9 @@ export function buildPrefixUsage(
     ];
 
     if (commandData?.usage) {
-        usageParts.push(commandData.usage);
+        usageParts.push(
+            commandData.usage,
+        );
 
         return usageParts
             .filter(Boolean)
@@ -45,17 +47,22 @@ export function buildPrefixUsage(
     } else if (
         !validation?.subcommandGroupName &&
         commandJson?.options?.some(
-            (option) => option.type === 1,
+            option =>
+                option.type === 1,
         )
     ) {
-        usageParts.push('[subcommand]');
+        usageParts.push(
+            '[subcommand]',
+        );
     }
 
     for (
         const option
         of validation?.optionDefs || []
     ) {
-        usageParts.push(`[${option.name}]`);
+        usageParts.push(
+            `[${option.name}]`,
+        );
     }
 
     return usageParts
@@ -66,20 +73,41 @@ export function buildPrefixUsage(
 export class ResponseCoordinator {
     constructor(
         interaction,
-        { message = null } = {},
+        {
+            message = null,
+        } = {},
     ) {
-        this.interaction = interaction;
-        this.message = message;
-        this._replyMessage = null;
-        this._finalized = false;
-        this._finalizedReason = null;
+        this.interaction =
+            interaction;
+
+        this.message =
+            message;
+
+        this._replyMessage =
+            null;
+
+        this._finalized =
+            false;
+
+        this._finalizedReason =
+            null;
     }
+
+    // ============================================================
+    // ATTACH
+    // ============================================================
 
     static attach(
         interaction,
         options = {},
     ) {
-        if (interaction._responseCoordinator) {
+        if (!interaction) {
+            return null;
+        }
+
+        if (
+            interaction._responseCoordinator
+        ) {
             return interaction._responseCoordinator;
         }
 
@@ -95,24 +123,53 @@ export class ResponseCoordinator {
         return coordinator;
     }
 
+    // ============================================================
+    // TYPE HELPERS
+    // ============================================================
+
     isPrefixInteraction() {
         return Boolean(
-            this.interaction._isPrefixCommand,
+            this.interaction?._isPrefixCommand
         );
     }
 
+    isDiscordInteraction() {
+        return !this.isPrefixInteraction();
+    }
+
+    // ============================================================
+    // RESPONSE STATE
+    // ============================================================
+
     hasResponded() {
-        if (this.isPrefixInteraction()) {
+        if (
+            this.isPrefixInteraction()
+        ) {
             return Boolean(
                 this._replyMessage ||
-                this.interaction._replyMessage ||
-                this.interaction.replied,
+                this.interaction?._replyMessage ||
+                this.interaction?.replied
             );
         }
 
         return Boolean(
-            this.interaction.replied ||
-            this.interaction.deferred,
+            this.interaction?.replied
+        );
+    }
+
+    hasBeenAcknowledged() {
+        if (
+            this.isPrefixInteraction()
+        ) {
+            return Boolean(
+                this.interaction?.deferred ||
+                this.hasResponded()
+            );
+        }
+
+        return Boolean(
+            this.interaction?.deferred ||
+            this.interaction?.replied
         );
     }
 
@@ -123,38 +180,89 @@ export class ResponseCoordinator {
         );
     }
 
-    markFinalized(reason) {
-        this._finalized = true;
-        this._finalizedReason = reason;
+    markFinalized(
+        reason,
+    ) {
+        this._finalized =
+            true;
+
+        this._finalizedReason =
+            reason;
+
+        /*
+         * A finalized response means that the interaction should
+         * be treated as having a response already.
+         *
+         * This is particularly important for prefix commands,
+         * where there is no native Discord interaction state.
+         */
+        if (
+            this.interaction
+        ) {
+            this.interaction.replied =
+                true;
+        }
     }
+
+    // ============================================================
+    // REPLY MESSAGE
+    // ============================================================
 
     getReplyMessage() {
         return (
             this._replyMessage ||
-            this.interaction._replyMessage ||
+            this.interaction?._replyMessage ||
             null
         );
     }
 
-    setReplyMessage(message) {
-        this._replyMessage = message;
-
-        this.interaction._replyMessage =
+    setReplyMessage(
+        message,
+    ) {
+        this._replyMessage =
             message;
 
-        this.interaction.replied = true;
+        if (
+            this.interaction
+        ) {
+            this.interaction._replyMessage =
+                message;
+
+            this.interaction.replied =
+                true;
+
+            this.interaction.deferred =
+                false;
+        }
+
+        return message;
     }
 
+    // ============================================================
+    // PREFIX DEFER
+    // ============================================================
+
     async deferLocal() {
-        if (this.isPrefixInteraction()) {
-            this.interaction.deferred = true;
+        if (
+            this.interaction
+        ) {
+            this.interaction.deferred =
+                true;
         }
 
         return true;
     }
 
-    async sendPrefixPayload(payload) {
-        if (!this.message?.channel) {
+    // ============================================================
+    // PREFIX SEND
+    // ============================================================
+
+    async sendPrefixPayload(
+        payload,
+    ) {
+        if (
+            !this.message?.channel
+        ) {
             throw new Error(
                 'Prefix command has no message channel.',
             );
@@ -165,26 +273,95 @@ export class ResponseCoordinator {
                 payload,
             );
 
-        this.setReplyMessage(sent);
+        this.setReplyMessage(
+            sent,
+        );
 
         return sent;
     }
 
-    async respond(payload) {
-        if (this.isUsageFinalized()) {
+    // ============================================================
+    // PREFIX EDIT
+    // ============================================================
+
+    async editPrefixMessage(
+        payload,
+    ) {
+        const existing =
+            this.getReplyMessage();
+
+        if (
+            existing &&
+            typeof existing.edit ===
+                'function'
+        ) {
+            try {
+                const edited =
+                    await existing.edit(
+                        payload,
+                    );
+
+                this.setReplyMessage(
+                    edited,
+                );
+
+                return edited;
+            } catch {
+                /*
+                 * If the old response cannot be edited, send a new
+                 * message instead.
+                 */
+            }
+        }
+
+        return this.sendPrefixPayload(
+            payload,
+        );
+    }
+
+    // ============================================================
+    // RESPOND
+    // ============================================================
+
+    async respond(
+        payload,
+    ) {
+        if (
+            this.isUsageFinalized()
+        ) {
             return this.getReplyMessage();
         }
 
-        if (this.isPrefixInteraction()) {
+        // --------------------------------------------------------
+        // PREFIX COMMAND
+        // --------------------------------------------------------
+
+        if (
+            this.isPrefixInteraction()
+        ) {
             const existing =
                 this.getReplyMessage();
 
             if (existing) {
-                return this.edit(payload);
+                return this.editPrefixMessage(
+                    payload,
+                );
             }
 
             return this.sendPrefixPayload(
                 payload,
+            );
+        }
+
+        // --------------------------------------------------------
+        // DISCORD INTERACTION
+        // --------------------------------------------------------
+
+        if (
+            !this.interaction
+        ) {
+            throw new Error(
+                'Cannot respond: interaction is missing.',
             );
         }
 
@@ -192,56 +369,58 @@ export class ResponseCoordinator {
             this.interaction.deferred &&
             !this.interaction.replied
         ) {
-            await this.interaction.editReply(
+            return this.interaction.editReply(
                 payload,
             );
-
-            return null;
         }
 
-        if (this.interaction.replied) {
+        if (
+            this.interaction.replied
+        ) {
             return this.interaction.followUp(
                 payload,
             );
         }
 
-        await this.interaction.reply(
+        return this.interaction.reply(
             payload,
         );
-
-        return null;
     }
 
-    async edit(payload) {
-        if (this.isUsageFinalized()) {
+    // ============================================================
+    // EDIT
+    // ============================================================
+
+    async edit(
+        payload,
+    ) {
+        if (
+            this.isUsageFinalized()
+        ) {
             return this.getReplyMessage();
         }
 
-        if (this.isPrefixInteraction()) {
-            const existing =
-                this.getReplyMessage();
+        // --------------------------------------------------------
+        // PREFIX
+        // --------------------------------------------------------
 
-            if (existing) {
-                try {
-                    const edited =
-                        await existing.edit(
-                            payload,
-                        );
-
-                    this.setReplyMessage(
-                        edited,
-                    );
-
-                    return edited;
-                } catch {
-                    return this.sendPrefixPayload(
-                        payload,
-                    );
-                }
-            }
-
-            return this.sendPrefixPayload(
+        if (
+            this.isPrefixInteraction()
+        ) {
+            return this.editPrefixMessage(
                 payload,
+            );
+        }
+
+        // --------------------------------------------------------
+        // DISCORD INTERACTION
+        // --------------------------------------------------------
+
+        if (
+            !this.interaction
+        ) {
+            throw new Error(
+                'Cannot edit response: interaction is missing.',
             );
         }
 
@@ -249,20 +428,44 @@ export class ResponseCoordinator {
             this.interaction.deferred ||
             this.interaction.replied
         ) {
-            await this.interaction.editReply(
+            return this.interaction.editReply(
                 payload,
             );
-
-            return null;
         }
 
-        return this.respond(payload);
+        return this.interaction.reply(
+            payload,
+        );
     }
 
-    async followUp(payload) {
-        if (this.isPrefixInteraction()) {
+    // ============================================================
+    // FOLLOW UP
+    // ============================================================
+
+    async followUp(
+        payload,
+    ) {
+        if (
+            this.isPrefixInteraction()
+        ) {
+            if (
+                !this.message?.channel
+            ) {
+                throw new Error(
+                    'Prefix command has no message channel.',
+                );
+            }
+
             return this.message.channel.send(
                 payload,
+            );
+        }
+
+        if (
+            !this.interaction
+        ) {
+            throw new Error(
+                'Cannot follow up: interaction is missing.',
             );
         }
 
@@ -271,7 +474,44 @@ export class ResponseCoordinator {
         );
     }
 
-    async respondUsage(usageLine) {
+    // ============================================================
+    // DELETE REPLY
+    // ============================================================
+
+    async deleteReply() {
+        const existing =
+            this.getReplyMessage();
+
+        if (
+            existing &&
+            existing.deletable
+        ) {
+            await existing.delete();
+        }
+
+        this._replyMessage =
+            null;
+
+        if (
+            this.interaction
+        ) {
+            this.interaction._replyMessage =
+                null;
+
+            this.interaction.replied =
+                false;
+        }
+
+        return null;
+    }
+
+    // ============================================================
+    // USAGE RESPONSE
+    // ============================================================
+
+    async respondUsage(
+        usageLine,
+    ) {
         const embed =
             buildUserErrorEmbed(
                 'validation',
@@ -287,10 +527,16 @@ export class ResponseCoordinator {
                 embeds: [embed],
             });
 
-        this.markFinalized('usage');
+        this.markFinalized(
+            'usage',
+        );
 
         return result;
     }
+
+    // ============================================================
+    // COMMAND USAGE RESPONSE
+    // ============================================================
 
     async respondUsageFromCommand(
         prefix,
