@@ -155,7 +155,51 @@ function formatDurationDisplay(minutes) {
 }
 
 // ============================================================
-// PREFIX USER RESOLUTION
+// PREFIX USER ID EXTRACTION
+// ============================================================
+
+function extractUserId(value) {
+    if (!value) {
+        return null;
+    }
+
+    const input = String(value).trim();
+
+    // <@123456789>
+    // <@!123456789>
+    const mentionMatch = input.match(
+        /^<@!?(\d+)>$/
+    );
+
+    if (mentionMatch) {
+        return mentionMatch[1];
+    }
+
+    // Raw Discord user ID.
+    if (/^\d{17,20}$/.test(input)) {
+        return input;
+    }
+
+    return null;
+}
+
+// ============================================================
+// PREFIX USER/MEMBER RESOLUTION
+// ============================================================
+//
+// IMPORTANT:
+// Prefix commands receive raw arguments rather than Discord's
+// normal slash-command resolved User objects.
+//
+// This resolver therefore explicitly resolves:
+//
+//   >mute @user 10m reason
+//   >mute <@123456789> 10m reason
+//   >mute 123456789 10m reason
+//
+// The raw ID is first looked up in the guild member cache and
+// then fetched directly from Discord.
+//
 // ============================================================
 
 async function resolvePrefixTarget(
@@ -163,48 +207,22 @@ async function resolvePrefixTarget(
     rawTarget
 ) {
     if (
-        !interaction?.guild ||
+        !interaction.guild ||
         !rawTarget
     ) {
         return null;
     }
 
-    const input = String(rawTarget)
-        .trim();
-
-    if (!input) {
-        return null;
-    }
-
-    // ========================================================
-    // EXTRACT USER ID
-    // ========================================================
-
-    let userId = null;
-
-    // Normal Discord mention:
-    // <@123456789>
-    if (/^<@!?(\d+)>$/.test(input)) {
-        userId = input.match(/^<@!?(\d+)>$/)?.[1];
-    }
-
-    // Raw Discord user ID:
-    // 123456789
-    else if (/^\d+$/.test(input)) {
-        userId = input;
-    }
+    const userId =
+        extractUserId(rawTarget);
 
     if (!userId) {
         logger.debug(
-            `Prefix timeout: could not extract a user ID from target "${input}".`
+            `Invalid prefix timeout target: ${String(rawTarget)}`
         );
 
         return null;
     }
-
-    logger.debug(
-        `Prefix timeout: resolving user ID ${userId} in guild ${interaction.guild.id}.`
-    );
 
     // ========================================================
     // CACHE
@@ -216,15 +234,23 @@ async function resolvePrefixTarget(
         );
 
     if (cachedMember) {
-        logger.debug(
-            `Prefix timeout: found ${userId} in the guild member cache.`
-        );
-
         return cachedMember;
     }
 
     // ========================================================
-    // DIRECT MEMBER FETCH
+    // DIRECT GUILD MEMBER FETCH
+    // ========================================================
+    //
+    // Use the Snowflake directly here.
+    //
+    // This is intentionally:
+    //
+    // guild.members.fetch(userId)
+    //
+    // instead of:
+    //
+    // guild.members.fetch({ user: userId, force: true })
+    //
     // ========================================================
 
     try {
@@ -234,68 +260,19 @@ async function resolvePrefixTarget(
             );
 
         if (member) {
-            logger.debug(
-                `Prefix timeout: successfully fetched ${userId} from the guild.`
-            );
-
             return member;
         }
     } catch (error) {
         logger.debug(
-            `Prefix timeout: direct guild member fetch failed for ${userId}.`,
+            `Unable to fetch prefix timeout target ${userId} from guild ${interaction.guild.id}`,
             {
                 error,
+                userId,
+                guildId:
+                    interaction.guild.id,
             }
         );
     }
-
-    // ========================================================
-    // FETCH ALL USER DATA AS A FALLBACK
-    // ========================================================
-
-    try {
-        const user =
-            await interaction.client.users.fetch(
-                userId
-            );
-
-        if (!user) {
-            return null;
-        }
-
-        try {
-            const member =
-                await interaction.guild.members.fetch(
-                    user.id
-                );
-
-            if (member) {
-                logger.debug(
-                    `Prefix timeout: resolved ${userId} through user fetch fallback.`
-                );
-
-                return member;
-            }
-        } catch (memberError) {
-            logger.debug(
-                `Prefix timeout: user ${userId} exists but could not be fetched as a guild member.`,
-                {
-                    error: memberError,
-                }
-            );
-        }
-    } catch (userError) {
-        logger.debug(
-            `Prefix timeout: user fetch failed for ${userId}.`,
-            {
-                error: userError,
-            }
-        );
-    }
-
-    logger.debug(
-        `Prefix timeout: user ${userId} could not be resolved as a member of guild ${interaction.guild.id}.`
-    );
 
     return null;
 }
@@ -333,11 +310,13 @@ function createTimeoutEmbed({
 // ============================================================
 
 export default {
+
     data: new SlashCommandBuilder()
         .setName('timeout')
         .setDescription(
             'Timeout a user for a specific duration.'
         )
+
         .addUserOption((option) =>
             option
                 .setName('target')
@@ -346,6 +325,7 @@ export default {
                 )
                 .setRequired(true)
         )
+
         .addIntegerOption((option) =>
             option
                 .setName('duration')
@@ -357,6 +337,7 @@ export default {
                     ...durationChoices
                 )
         )
+
         .addStringOption((option) =>
             option
                 .setName('reason')
@@ -364,6 +345,7 @@ export default {
                     'Reason for the timeout'
                 )
         )
+
         .setDefaultMemberPermissions(
             PermissionFlagsBits.ModerateMembers
         ),
@@ -379,12 +361,9 @@ export default {
         config,
         client
     ) {
+
         const rawArgs =
             interaction.options?._positional || [];
-
-        logger.debug(
-            `Prefix timeout raw arguments: ${JSON.stringify(rawArgs)}`
-        );
 
         const targetInput =
             rawArgs[0];
@@ -414,7 +393,9 @@ export default {
                 embeds: [
                     new EmbedBuilder()
                         .setColor(0xED4245)
-                        .setTitle('User Not Found')
+                        .setTitle(
+                            'User Not Found'
+                        )
                         .setDescription(
                             'I could not find that user in this server.\n\n' +
                             '**Usage:** `>mute <user ID/@mention> <duration> [reason]`'
@@ -597,6 +578,7 @@ export default {
         config,
         client
     ) {
+
         const deferSuccess =
             await InteractionHelper.safeDefer(
                 interaction
