@@ -163,7 +163,7 @@ async function resolvePrefixTarget(
     rawTarget
 ) {
     if (
-        !interaction?.guild ||
+        !interaction.guild ||
         !rawTarget
     ) {
         return null;
@@ -178,10 +178,8 @@ async function resolvePrefixTarget(
      * <@!123456789>
      * 123456789
      *
-     * The ID is deliberately not restricted to a specific
-     * number of digits. Discord user IDs are snowflakes, and
-     * the important part here is that the entire argument is
-     * numeric.
+     * We intentionally accept any numeric Discord snowflake
+     * here instead of restricting it to 17-20 digits.
      */
 
     const mentionMatch = input.match(
@@ -198,7 +196,7 @@ async function resolvePrefixTarget(
 
     if (!userId) {
         logger.debug(
-            `Prefix timeout target "${input}" is not a valid Discord user ID or mention.`
+            `Invalid prefix timeout target: "${input}"`
         );
 
         return null;
@@ -206,7 +204,7 @@ async function resolvePrefixTarget(
 
     try {
         /*
-         * First check the cache.
+         * First check the member cache.
          */
         const cachedMember =
             interaction.guild.members.cache.get(
@@ -214,6 +212,10 @@ async function resolvePrefixTarget(
             );
 
         if (cachedMember) {
+            logger.debug(
+                `Prefix timeout target ${userId} resolved from member cache.`
+            );
+
             return cachedMember;
         }
 
@@ -222,13 +224,25 @@ async function resolvePrefixTarget(
          *
          * Fetch the guild member directly by ID.
          *
-         * This allows raw Discord IDs to work even when
-         * the member is not currently cached.
+         * Do NOT use:
+         *
+         * guild.members.fetch({
+         *     user: userId,
+         *     force: true
+         * })
+         *
+         * Use the direct ID form instead.
          */
         const member =
             await interaction.guild.members.fetch(
                 userId
             );
+
+        if (member) {
+            logger.debug(
+                `Prefix timeout target ${userId} resolved by REST member fetch.`
+            );
+        }
 
         return member || null;
     } catch (error) {
@@ -338,6 +352,10 @@ export default {
                 .trim() ||
             'No reason provided';
 
+        logger.info(
+            `Prefix timeout received target="${targetInput}", duration="${durationInput}", reason="${reason}"`
+        );
+
         // ====================================================
         // TARGET
         // ====================================================
@@ -381,9 +399,7 @@ export default {
                 embeds: [
                     new EmbedBuilder()
                         .setColor(0xED4245)
-                        .setTitle(
-                            'Invalid Timeout Duration'
-                        )
+                        .setTitle('Invalid Timeout Duration')
                         .setDescription(
                             'Please provide a valid timeout duration.\n\n' +
                             '**Examples:** `10m`, `1h`, `6h`, `1d`, `1w`\n\n' +
