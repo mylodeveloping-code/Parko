@@ -163,76 +163,71 @@ async function resolvePrefixTarget(
     rawTarget
 ) {
     if (
-        !interaction.guild ||
+        !interaction?.guild ||
         !rawTarget
     ) {
         return null;
     }
 
-    const input = String(rawTarget).trim();
+    const input = String(rawTarget)
+        .trim();
 
-    /*
-     * Accept:
-     *
-     * <@123456789>
-     * <@!123456789>
-     * 123456789
-     *
-     * We intentionally accept any numeric Discord snowflake
-     * here instead of restricting it to 17-20 digits.
-     */
+    if (!input) {
+        return null;
+    }
 
-    const mentionMatch = input.match(
-        /^<@!?(\d+)>$/
-    );
+    // ========================================================
+    // EXTRACT USER ID
+    // ========================================================
 
-    const idMatch = input.match(
-        /^(\d+)$/
-    );
+    let userId = null;
 
-    const userId =
-        mentionMatch?.[1] ||
-        idMatch?.[1];
+    // Normal Discord mention:
+    // <@123456789>
+    if (/^<@!?(\d+)>$/.test(input)) {
+        userId = input.match(/^<@!?(\d+)>$/)?.[1];
+    }
+
+    // Raw Discord user ID:
+    // 123456789
+    else if (/^\d+$/.test(input)) {
+        userId = input;
+    }
 
     if (!userId) {
         logger.debug(
-            `Invalid prefix timeout target: "${input}"`
+            `Prefix timeout: could not extract a user ID from target "${input}".`
         );
 
         return null;
     }
 
+    logger.debug(
+        `Prefix timeout: resolving user ID ${userId} in guild ${interaction.guild.id}.`
+    );
+
+    // ========================================================
+    // CACHE
+    // ========================================================
+
+    const cachedMember =
+        interaction.guild.members.cache.get(
+            userId
+        );
+
+    if (cachedMember) {
+        logger.debug(
+            `Prefix timeout: found ${userId} in the guild member cache.`
+        );
+
+        return cachedMember;
+    }
+
+    // ========================================================
+    // DIRECT MEMBER FETCH
+    // ========================================================
+
     try {
-        /*
-         * First check the member cache.
-         */
-        const cachedMember =
-            interaction.guild.members.cache.get(
-                userId
-            );
-
-        if (cachedMember) {
-            logger.debug(
-                `Prefix timeout target ${userId} resolved from member cache.`
-            );
-
-            return cachedMember;
-        }
-
-        /*
-         * IMPORTANT:
-         *
-         * Fetch the guild member directly by ID.
-         *
-         * Do NOT use:
-         *
-         * guild.members.fetch({
-         *     user: userId,
-         *     force: true
-         * })
-         *
-         * Use the direct ID form instead.
-         */
         const member =
             await interaction.guild.members.fetch(
                 userId
@@ -240,21 +235,69 @@ async function resolvePrefixTarget(
 
         if (member) {
             logger.debug(
-                `Prefix timeout target ${userId} resolved by REST member fetch.`
+                `Prefix timeout: successfully fetched ${userId} from the guild.`
             );
-        }
 
-        return member || null;
+            return member;
+        }
     } catch (error) {
         logger.debug(
-            `Unable to resolve prefix timeout target ${userId} in guild ${interaction.guild.id}.`,
+            `Prefix timeout: direct guild member fetch failed for ${userId}.`,
             {
                 error,
             }
         );
-
-        return null;
     }
+
+    // ========================================================
+    // FETCH ALL USER DATA AS A FALLBACK
+    // ========================================================
+
+    try {
+        const user =
+            await interaction.client.users.fetch(
+                userId
+            );
+
+        if (!user) {
+            return null;
+        }
+
+        try {
+            const member =
+                await interaction.guild.members.fetch(
+                    user.id
+                );
+
+            if (member) {
+                logger.debug(
+                    `Prefix timeout: resolved ${userId} through user fetch fallback.`
+                );
+
+                return member;
+            }
+        } catch (memberError) {
+            logger.debug(
+                `Prefix timeout: user ${userId} exists but could not be fetched as a guild member.`,
+                {
+                    error: memberError,
+                }
+            );
+        }
+    } catch (userError) {
+        logger.debug(
+            `Prefix timeout: user fetch failed for ${userId}.`,
+            {
+                error: userError,
+            }
+        );
+    }
+
+    logger.debug(
+        `Prefix timeout: user ${userId} could not be resolved as a member of guild ${interaction.guild.id}.`
+    );
+
+    return null;
 }
 
 // ============================================================
@@ -339,6 +382,10 @@ export default {
         const rawArgs =
             interaction.options?._positional || [];
 
+        logger.debug(
+            `Prefix timeout raw arguments: ${JSON.stringify(rawArgs)}`
+        );
+
         const targetInput =
             rawArgs[0];
 
@@ -351,10 +398,6 @@ export default {
                 .join(' ')
                 .trim() ||
             'No reason provided';
-
-        logger.info(
-            `Prefix timeout received target="${targetInput}", duration="${durationInput}", reason="${reason}"`
-        );
 
         // ====================================================
         // TARGET
@@ -399,7 +442,9 @@ export default {
                 embeds: [
                     new EmbedBuilder()
                         .setColor(0xED4245)
-                        .setTitle('Invalid Timeout Duration')
+                        .setTitle(
+                            'Invalid Timeout Duration'
+                        )
                         .setDescription(
                             'Please provide a valid timeout duration.\n\n' +
                             '**Examples:** `10m`, `1h`, `6h`, `1d`, `1w`\n\n' +
