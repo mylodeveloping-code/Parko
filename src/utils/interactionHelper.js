@@ -7,27 +7,21 @@ import {
 } from './errorHandler.js';
 import { ResponseCoordinator } from './responseCoordinator.js';
 
-const INTERACTION_TIMEOUT_MS =
-    15 * 60 * 1000;
+const INTERACTION_TIMEOUT_MS = 15 * 60 * 1000;
 
-const INTERACTION_UNAVAILABLE_CODES =
-    new Set([
-        10062,
-        40060,
-        50027,
-    ]);
+const INTERACTION_UNAVAILABLE_CODES = new Set([
+    10062,
+    40060,
+    50027,
+]);
 
-function isInteractionUnavailableError(
-    error,
-) {
+function isInteractionUnavailableError(error) {
     return INTERACTION_UNAVAILABLE_CODES.has(
         error?.code,
     );
 }
 
-function sanitizeEditReplyOptions(
-    options = {},
-) {
+function sanitizeEditReplyOptions(options = {}) {
     if (
         !options ||
         typeof options !== 'object'
@@ -43,8 +37,7 @@ function sanitizeEditReplyOptions(
 
     if (
         flags &&
-        (flags &
-            MessageFlags.IsComponentsV2)
+        (flags & MessageFlags.IsComponentsV2)
     ) {
         rest.flags =
             MessageFlags.IsComponentsV2;
@@ -61,110 +54,19 @@ export class InteractionHelper {
         );
     }
 
-    static patchInteractionResponses(
-        interaction,
-    ) {
-        if (
-            !interaction ||
-            interaction.__titanResponsePatched
-        ) {
-            return;
-        }
-
-        const originalReply =
-            interaction.reply?.bind(
-                interaction,
-            );
-
-        const originalEditReply =
-            interaction.editReply?.bind(
-                interaction,
-            );
-
-        const originalFollowUp =
-            interaction.followUp?.bind(
-                interaction,
-            );
-
-        if (
-            !originalReply ||
-            !originalEditReply ||
-            !originalFollowUp
-        ) {
-            return;
-        }
-
-        interaction.reply = async (
-            options,
-        ) => {
-            const coordinator =
-                InteractionHelper.getCoordinator(
-                    interaction,
-                );
-
-            if (
-                coordinator?.isUsageFinalized()
-            ) {
-                return coordinator.getReplyMessage?.();
-            }
-
-            if (
-                !interaction.deferred &&
-                !interaction.replied
-            ) {
-                if (
-                    coordinator &&
-                    interaction._isPrefixCommand
-                ) {
-                    return coordinator.respond(
-                        options,
-                    );
-                }
-
-                return originalReply(options);
-            }
-
-            if (
-                interaction.deferred &&
-                !interaction.replied
-            ) {
-                if (
-                    coordinator &&
-                    interaction._isPrefixCommand
-                ) {
-                    return coordinator.edit(
-                        sanitizeEditReplyOptions(
-                            options,
-                        ),
-                    );
-                }
-
-                return originalEditReply(
-                    sanitizeEditReplyOptions(
-                        options,
-                    ),
-                );
-            }
-
-            if (
-                coordinator &&
-                interaction._isPrefixCommand
-            ) {
-                return coordinator.followUp(
-                    options,
-                );
-            }
-
-            return originalFollowUp(options);
-        };
-
-        interaction.__titanResponsePatched =
-            true;
+    /*
+     * IMPORTANT:
+     *
+     * Native Discord interactions are no longer patched.
+     *
+     * Prefix commands use ResponseCoordinator directly.
+     * Slash commands use Discord.js directly.
+     */
+    static patchInteractionResponses() {
+        return;
     }
 
-    static isInteractionValid(
-        interaction,
-    ) {
+    static isInteractionValid(interaction) {
         if (
             !interaction ||
             typeof interaction !== 'object'
@@ -257,30 +159,24 @@ export class InteractionHelper {
                 )
             ) {
                 logger.warn(
-                    `Interaction ${interaction.id} has expired before defer, ignoring`,
+                    `Interaction ${interaction.id} is invalid before defer.`,
                 );
 
-                return false;
-            }
-
-            const coordinator =
-                this.getCoordinator(
-                    interaction,
-                );
-
-            if (
-                coordinator?.isUsageFinalized()
-            ) {
                 return false;
             }
 
             if (
                 interaction._isPrefixCommand
             ) {
-                return (
-                    coordinator?.deferLocal() ??
-                    false
-                );
+                const coordinator =
+                    this.getCoordinator(
+                        interaction,
+                    ) ||
+                    ResponseCoordinator.attach(
+                        interaction,
+                    );
+
+                return coordinator.deferLocal();
             }
 
             await interaction.deferReply(
@@ -303,15 +199,15 @@ export class InteractionHelper {
             }
 
             if (
-                error.name ===
+                error?.name ===
                     'InteractionAlreadyReplied' ||
-                error.code === 40060
+                error?.code === 40060
             ) {
                 return true;
             }
 
             logger.error(
-                'Failed to defer reply:',
+                'Failed to defer interaction:',
                 error,
             );
 
@@ -324,33 +220,29 @@ export class InteractionHelper {
         options,
     ) {
         try {
+            if (
+                !this.isInteractionValid(
+                    interaction,
+                )
+            ) {
+                return false;
+            }
+
             const coordinator =
                 this.getCoordinator(
                     interaction,
                 );
 
             if (
-                coordinator?.isUsageFinalized()
-            ) {
-                return false;
-            }
-
-            if (
-                !this.isInteractionValid(
-                    interaction,
-                )
-            ) {
-                logger.warn(
-                    `Interaction ${interaction.id} has expired before edit, ignoring`,
-                );
-
-                return false;
-            }
-
-            if (
-                coordinator &&
                 interaction._isPrefixCommand
             ) {
+                if (!coordinator) {
+                    return this.safeReply(
+                        interaction,
+                        options,
+                    );
+                }
+
                 await coordinator.edit(
                     sanitizeEditReplyOptions(
                         options,
@@ -392,7 +284,7 @@ export class InteractionHelper {
             }
 
             if (
-                error.code === 10008
+                error?.code === 10008
             ) {
                 try {
                     await interaction.followUp(
@@ -400,30 +292,15 @@ export class InteractionHelper {
                     );
 
                     return true;
-                } catch (
-                    followUpError
-                ) {
-                    if (
-                        isInteractionUnavailableError(
-                            followUpError,
-                        )
-                    ) {
-                        return false;
-                    }
-
-                    logger.error(
-                        'Failed to follow up after deleted reply:',
-                        followUpError,
-                    );
-
+                } catch {
                     return false;
                 }
             }
 
             if (
-                error.name ===
+                error?.name ===
                     'InteractionNotReplied' ||
-                error.message?.includes(
+                error?.message?.includes(
                     'not been sent or deferred',
                 )
             ) {
@@ -447,33 +324,26 @@ export class InteractionHelper {
         options,
     ) {
         try {
+            if (
+                !this.isInteractionValid(
+                    interaction,
+                )
+            ) {
+                return false;
+            }
+
             const coordinator =
                 this.getCoordinator(
                     interaction,
                 );
 
             if (
-                coordinator?.isUsageFinalized()
-            ) {
-                return false;
-            }
-
-            if (
-                !this.isInteractionValid(
-                    interaction,
-                )
-            ) {
-                logger.warn(
-                    `Interaction ${interaction.id} has expired before reply, ignoring`,
-                );
-
-                return false;
-            }
-
-            if (
-                coordinator &&
                 interaction._isPrefixCommand
             ) {
+                if (!coordinator) {
+                    return false;
+                }
+
                 if (
                     coordinator.hasResponded()
                 ) {
@@ -512,7 +382,9 @@ export class InteractionHelper {
                 return true;
             }
 
-            await interaction.reply(options);
+            await interaction.reply(
+                options,
+            );
 
             return true;
         } catch (error) {
@@ -521,16 +393,11 @@ export class InteractionHelper {
                     error,
                 )
             ) {
-                logger.warn(
-                    `Interaction ${interaction.id} unavailable during reply:`,
-                    error.message,
-                );
-
                 return false;
             }
 
             if (
-                error.code === 40060
+                error?.code === 40060
             ) {
                 return false;
             }
@@ -562,7 +429,7 @@ export class InteractionHelper {
                 interaction.deferred
             ) {
                 logger.warn(
-                    `Interaction ${interaction.id} already acknowledged, cannot show modal`,
+                    `Interaction ${interaction.id} already acknowledged; cannot show modal.`,
                 );
 
                 return false;
@@ -622,12 +489,6 @@ export class InteractionHelper {
             );
 
         if (
-            coordinator?.isUsageFinalized()
-        ) {
-            return;
-        }
-
-        if (
             autoDefer &&
             !interaction.replied &&
             !interaction.deferred
@@ -640,7 +501,7 @@ export class InteractionHelper {
 
             if (!deferSuccess) {
                 logger.warn(
-                    `Interaction ${interaction.id} could not be acknowledged; command execution skipped.`,
+                    `Interaction ${interaction.id} could not be acknowledged.`,
                 );
 
                 return;
@@ -654,12 +515,6 @@ export class InteractionHelper {
                 'Error executing command:',
                 error,
             );
-
-            if (
-                coordinator?.isUsageFinalized()
-            ) {
-                return;
-            }
 
             const errorToHandle =
                 typeof errorEmbed ===
@@ -696,12 +551,6 @@ export class InteractionHelper {
             );
 
         if (
-            coordinator?.isUsageFinalized()
-        ) {
-            return false;
-        }
-
-        if (
             interaction._isPrefixCommand
         ) {
             if (
@@ -726,26 +575,18 @@ export class InteractionHelper {
             );
         }
 
-        const isReady =
-            await this.ensureReady(
+        if (
+            interaction.deferred &&
+            !interaction.replied
+        ) {
+            return this.safeEditReply(
                 interaction,
-                options?.flags
-                    ? {
-                          flags:
-                              options.flags,
-                      }
-                    : {
-                          flags:
-                              MessageFlags.Ephemeral,
-                      },
+                options,
             );
-
-        if (!isReady) {
-            return false;
         }
 
-        if (interaction.deferred) {
-            return this.safeEditReply(
+        if (interaction.replied) {
+            return this.safeReply(
                 interaction,
                 options,
             );

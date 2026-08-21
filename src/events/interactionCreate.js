@@ -1,15 +1,24 @@
 import { Events, MessageFlags } from 'discord.js';
+
 import { logger } from '../utils/logger.js';
+
 import { getGuildConfig } from '../services/config/guildConfig.js';
+
 import {
     getBotMessage,
     isBotOwner,
     isCommandCategoryEnabled,
 } from '../config/bot.js';
+
 import botConfig from '../config/bot.js';
 
-import { handleApplicationModal } from '../commands/Community/apply.js';
-import { handleMusicSeekModal } from '../handlers/musicButtonHandler.js';
+import {
+    handleApplicationModal,
+} from '../commands/Community/apply.js';
+
+import {
+    handleMusicSeekModal,
+} from '../handlers/musicButtonHandler.js';
 
 import {
     handleInteractionError,
@@ -23,37 +32,62 @@ import {
     runWithTraceContext,
 } from '../utils/logger.js';
 
-import { validateChatInputPayloadOrThrow } from '../utils/commandInputValidation.js';
+import {
+    validateChatInputPayloadOrThrow,
+} from '../utils/commandInputValidation.js';
 
 import {
     enforceAbuseProtection,
     formatCooldownDuration,
 } from '../utils/abuseProtection.js';
 
-import { isCommandEnabled } from '../services/commandAccessService.js';
-import { resolveSlashAccessKey } from '../utils/messageAdapter.js';
-import { isCollectorManagedComponent } from '../utils/collectorComponents.js';
-import { ResponseCoordinator } from '../utils/responseCoordinator.js';
-import { enforceDefaultCommandPermissions } from '../utils/permissionGuard.js';
-import { InteractionHelper } from '../utils/interactionHelper.js';
-import { isBlacklisted } from '../utils/blacklist.js';
+import {
+    isCommandEnabled,
+} from '../services/commandAccessService.js';
+
+import {
+    resolveSlashAccessKey,
+} from '../utils/messageAdapter.js';
+
+import {
+    isCollectorManagedComponent,
+} from '../utils/collectorComponents.js';
+
+import {
+    ResponseCoordinator,
+} from '../utils/responseCoordinator.js';
+
+import {
+    enforceDefaultCommandPermissions,
+} from '../utils/permissionGuard.js';
+
+import {
+    InteractionHelper,
+} from '../utils/interactionHelper.js';
+
+import {
+    isBlacklisted,
+} from '../utils/blacklist.js';
 
 // ============================================================
 // PB ACCESS
 // ============================================================
 
-const PB_ACCESS_ROLE_ID = '1537847398746030100';
+const PB_ACCESS_ROLE_ID =
+    '1537847398746030100';
 
 // ============================================================
 // BLACKLIST
 // ============================================================
 
-const BLACKLIST_OWNER_ID = '1171948174190067737';
+const BLACKLIST_OWNER_ID =
+    '1171948174190067737';
 
-const BLACKLIST_MANAGEMENT_COMMANDS = new Set([
-    'bl',
-    'unbl',
-]);
+const BLACKLIST_MANAGEMENT_COMMANDS =
+    new Set([
+        'bl',
+        'unbl',
+    ]);
 
 // ============================================================
 // COMMAND ERROR SUBTYPES
@@ -80,18 +114,26 @@ const COMMAND_ERROR_SUBTYPES = {
 // TRACE CONTEXT
 // ============================================================
 
-function withTraceContext(context = {}, traceContext = {}) {
+function withTraceContext(
+    context = {},
+    traceContext = {},
+) {
     return {
-        traceId: traceContext.traceId,
+        traceId:
+            traceContext.traceId,
+
         guildId:
             context.guildId ||
             traceContext.guildId,
+
         userId:
             context.userId ||
             traceContext.userId,
+
         command:
             context.commandName ||
             traceContext.command,
+
         ...context,
     };
 }
@@ -100,33 +142,22 @@ function withTraceContext(context = {}, traceContext = {}) {
 // BLACKLIST RESPONSE
 // ============================================================
 
-async function respondToBlacklistedUser(interaction) {
+async function respondToBlacklistedUser(
+    interaction,
+) {
     const embed = {
-        title: '🚫 You Are Blacklisted',
+        title:
+            '🚫 You Are Blacklisted',
+
         description:
             'You are currently **blacklisted from using this bot**.\n\n' +
             'You do not have permission to use any of the bot\'s commands while you are blacklisted.\n\n' +
             'If you believe this was done in error, please contact the bot developer.',
+
         color: 0xff0000,
     };
 
     try {
-        if (
-            !interaction.replied &&
-            !interaction.deferred
-        ) {
-            await interaction.reply({
-                embeds: [embed],
-                flags: MessageFlags.Ephemeral,
-            });
-
-            logger.info(
-                `Sent blacklist response to ${interaction.user.tag} (${interaction.user.id}).`,
-            );
-
-            return true;
-        }
-
         if (
             interaction.deferred &&
             !interaction.replied
@@ -135,104 +166,31 @@ async function respondToBlacklistedUser(interaction) {
                 embeds: [embed],
             });
 
-            logger.info(
-                `Edited deferred blacklist response for ${interaction.user.tag} (${interaction.user.id}).`,
-            );
-
             return true;
         }
 
-        if (interaction.replied) {
-            await interaction.followUp({
+        if (
+            !interaction.replied
+        ) {
+            await interaction.reply({
                 embeds: [embed],
-                flags: MessageFlags.Ephemeral,
+                flags:
+                    MessageFlags.Ephemeral,
             });
 
             return true;
         }
-    } catch (error) {
-        logger.error(
-            `Failed to respond to blacklisted user ${interaction.user.tag} (${interaction.user.id}):`,
-            error,
-        );
-    }
 
-    return false;
-}
-
-// ============================================================
-// IMMEDIATE SLASH COMMAND DEFER
-// ============================================================
-//
-// Every slash command must be acknowledged immediately.
-// Discord only gives the bot a few seconds to acknowledge
-// an interaction.
-//
-// Previously this was only done for /play, which meant that
-// every other slash command could expire while the bot was
-// performing blacklist checks, guild config loading,
-// permission checks, abuse protection, etc.
-//
-// We now defer EVERY slash command immediately.
-//
-
-async function immediatelyDeferChatInputInteraction(
-    interaction,
-) {
-    if (
-        !interaction?.isChatInputCommand?.()
-    ) {
-        return false;
-    }
-
-    if (
-        interaction.replied ||
-        interaction.deferred
-    ) {
-        return true;
-    }
-
-    const commandName =
-        interaction.commandName || 'unknown';
-
-    const start = Date.now();
-
-    console.log(
-        `[INTERACTION DEBUG] Received /${commandName} | ID: ${interaction.id}`,
-    );
-
-    console.log(
-        `[INTERACTION DEBUG] Attempting immediate defer for /${commandName}...`,
-    );
-
-    try {
-        await interaction.deferReply({
-            flags: MessageFlags.Ephemeral,
+        await interaction.followUp({
+            embeds: [embed],
+            flags:
+                MessageFlags.Ephemeral,
         });
 
-        const elapsed =
-            Date.now() - start;
-
-        console.log(
-            `[INTERACTION DEBUG] /${commandName} successfully deferred in ${elapsed}ms.`,
-        );
-
-        logger.info(
-            `[Interaction] /${commandName} interaction deferred immediately in ${elapsed}ms.`,
-        );
-
         return true;
     } catch (error) {
-        const elapsed =
-            Date.now() - start;
-
-        console.error(
-            `[INTERACTION DEBUG] /${commandName} DEFER FAILED after ${elapsed}ms:`,
-            error,
-        );
-
         logger.error(
-            `[Interaction] Failed to immediately defer /${commandName} after ${elapsed}ms:`,
+            'Failed to respond to blacklisted user:',
             error,
         );
 
@@ -247,31 +205,20 @@ async function immediatelyDeferChatInputInteraction(
 export default {
     name: Events.InteractionCreate,
 
-    async execute(interaction, client) {
-        const interactionTraceContext =
-            createInteractionTraceContext(interaction);
+    async execute(
+        interaction,
+        client,
+    ) {
+        const traceContext =
+            createInteractionTraceContext(
+                interaction,
+            );
 
         interaction.traceContext =
-            interactionTraceContext;
+            traceContext;
 
         interaction.traceId =
-            interactionTraceContext.traceId;
-
-        // ========================================================
-        // IMMEDIATELY ACKNOWLEDGE ALL SLASH COMMANDS
-        //
-        // This MUST happen before blacklist checks, guild config,
-        // abuse protection, permissions, command access, etc.
-        // ========================================================
-
-        let commandWasDeferred = false;
-
-        if (interaction.isChatInputCommand()) {
-            commandWasDeferred =
-                await immediatelyDeferChatInputInteraction(
-                    interaction,
-                );
-        }
+            traceContext.traceId;
 
         // ========================================================
         // BLACKLIST
@@ -279,7 +226,9 @@ export default {
 
         if (
             interaction.user &&
-            isBlacklisted(interaction.user.id)
+            isBlacklisted(
+                interaction.user.id,
+            )
         ) {
             if (
                 interaction.isChatInputCommand()
@@ -316,41 +265,29 @@ export default {
         if (
             interaction.isChatInputCommand() &&
             BLACKLIST_MANAGEMENT_COMMANDS.has(
-                interaction.commandName?.toLowerCase(),
+                interaction.commandName
+                    ?.toLowerCase(),
             ) &&
             interaction.user.id !==
                 BLACKLIST_OWNER_ID
         ) {
             try {
-                if (
-                    interaction.deferred &&
-                    !interaction.replied
-                ) {
-                    await interaction.editReply({
-                        embeds: [
-                            {
-                                title:
-                                    '⛔ Permission Denied',
-                                description:
-                                    'Only the bot developer can use the blacklist and unblacklist commands.',
-                                color: 0xff0000,
-                            },
-                        ],
-                    });
-                } else {
-                    await interaction.reply({
-                        embeds: [
-                            {
-                                title:
-                                    '⛔ Permission Denied',
-                                description:
-                                    'Only the bot developer can use the blacklist and unblacklist commands.',
-                                color: 0xff0000,
-                            },
-                        ],
-                        flags: MessageFlags.Ephemeral,
-                    });
-                }
+                await interaction.reply({
+                    embeds: [
+                        {
+                            title:
+                                '⛔ Permission Denied',
+
+                            description:
+                                'Only the bot developer can use the blacklist and unblacklist commands.',
+
+                            color: 0xff0000,
+                        },
+                    ],
+
+                    flags:
+                        MessageFlags.Ephemeral,
+                });
             } catch (error) {
                 logger.error(
                     'Failed to send blacklist permission response:',
@@ -361,26 +298,10 @@ export default {
             return;
         }
 
-        // ========================================================
-        // TRACE CONTEXT
-        // ========================================================
-
         return runWithTraceContext(
-            interactionTraceContext,
+            traceContext,
             async () => {
                 try {
-                    // ==================================================
-                    // PATCH RESPONSES
-                    // ==================================================
-
-                    InteractionHelper.patchInteractionResponses(
-                        interaction,
-                    );
-
-                    ResponseCoordinator.attach(
-                        interaction,
-                    );
-
                     // ==================================================
                     // CHAT INPUT / SLASH COMMAND
                     // ==================================================
@@ -391,7 +312,7 @@ export default {
                         const commandName =
                             String(
                                 interaction.commandName ||
-                                '',
+                                    '',
                             ).toLowerCase();
 
                         logger.info(
@@ -399,13 +320,35 @@ export default {
                         );
 
                         // ==================================================
-                        // COMMAND WAS ALREADY ACKNOWLEDGED
+                        // IMMEDIATE ACKNOWLEDGEMENT
                         // ==================================================
+                        //
+                        // Every slash command gets acknowledged here.
+                        // This happens BEFORE command lookup, config,
+                        // permissions, cooldowns, database work, etc.
+                        //
 
-                        if (commandWasDeferred) {
-                            logger.info(
-                                `[Interaction] /${commandName} already acknowledged before command checks.`,
-                            );
+                        if (
+                            !interaction.replied &&
+                            !interaction.deferred
+                        ) {
+                            try {
+                                await interaction.deferReply({
+                                    flags:
+                                        MessageFlags.Ephemeral,
+                                });
+
+                                logger.info(
+                                    `✅ Acknowledged /${commandName}.`,
+                                );
+                            } catch (error) {
+                                logger.error(
+                                    `❌ Failed to acknowledge /${commandName}:`,
+                                    error,
+                                );
+
+                                return;
+                            }
                         }
 
                         // ==================================================
@@ -418,20 +361,6 @@ export default {
                             );
 
                         if (!command) {
-                            logger.error(
-                                `❌ Command /${commandName} was received by Discord but was NOT found in client.commands.`,
-                            );
-
-                            logger.error(
-                                `Loaded commands: ${
-                                    client.commands
-                                        ? [
-                                              ...client.commands.keys(),
-                                          ].join(', ')
-                                        : 'client.commands is missing'
-                                }`,
-                            );
-
                             throw createError(
                                 `No command matching ${commandName} was found.`,
                                 ErrorTypes.CONFIGURATION,
@@ -440,7 +369,7 @@ export default {
                                     {
                                         commandName,
                                     },
-                                    interactionTraceContext,
+                                    traceContext,
                                 ),
                             );
                         }
@@ -449,10 +378,6 @@ export default {
                             typeof command.execute !==
                             'function'
                         ) {
-                            logger.error(
-                                `❌ Command /${commandName} exists, but command.execute is not a function.`,
-                            );
-
                             throw createError(
                                 `Command ${commandName} has no execute function.`,
                                 ErrorTypes.CONFIGURATION,
@@ -461,14 +386,10 @@ export default {
                                     {
                                         commandName,
                                     },
-                                    interactionTraceContext,
+                                    traceContext,
                                 ),
                             );
                         }
-
-                        logger.info(
-                            `✅ Found command /${commandName}. Beginning execution.`,
-                        );
 
                         // ==================================================
                         // VALIDATE INPUT
@@ -480,9 +401,10 @@ export default {
                                 {
                                     type:
                                         'command_input_validation',
+
                                     commandName,
                                 },
-                                interactionTraceContext,
+                                traceContext,
                             ),
                         );
 
@@ -507,7 +429,7 @@ export default {
                                     {
                                         commandName,
                                     },
-                                    interactionTraceContext,
+                                    traceContext,
                                 ),
                             );
                         }
@@ -533,7 +455,7 @@ export default {
                                         category:
                                             command.category,
                                     },
-                                    interactionTraceContext,
+                                    traceContext,
                                 ),
                             );
                         }
@@ -549,7 +471,8 @@ export default {
                             ) || 0;
 
                         if (
-                            defaultCooldownSec > 0 &&
+                            defaultCooldownSec >
+                                0 &&
                             !isBotOwner(
                                 interaction.user.id,
                             )
@@ -564,7 +487,8 @@ export default {
 
                             if (
                                 expiresAt &&
-                                Date.now() < expiresAt
+                                Date.now() <
+                                    expiresAt
                             ) {
                                 const remainingSec =
                                     Math.ceil(
@@ -579,7 +503,8 @@ export default {
                                     getBotMessage(
                                         'cooldownActive',
                                         {
-                                            time: `${remainingSec}s`,
+                                            time:
+                                                `${remainingSec}s`,
                                         },
                                     ),
                                     withTraceContext(
@@ -587,7 +512,7 @@ export default {
                                             commandName,
                                             remainingSec,
                                         },
-                                        interactionTraceContext,
+                                        traceContext,
                                     ),
                                 );
                             }
@@ -638,7 +563,7 @@ export default {
                                             abuseProtection.policy
                                                 ?.maxAttempts,
                                     },
-                                    interactionTraceContext,
+                                    traceContext,
                                 ),
                             );
                         }
@@ -647,14 +572,17 @@ export default {
                         // GUILD CONFIG
                         // ==================================================
 
-                        let guildConfig = null;
+                        let guildConfig =
+                            null;
 
-                        if (interaction.guild) {
+                        if (
+                            interaction.guild
+                        ) {
                             guildConfig =
                                 await getGuildConfig(
                                     client,
                                     interaction.guild.id,
-                                    interactionTraceContext,
+                                    traceContext,
                                 );
 
                             const accessKey =
@@ -682,7 +610,7 @@ export default {
                                             guildId:
                                                 interaction.guild.id,
                                         },
-                                        interactionTraceContext,
+                                        traceContext,
                                     ),
                                 );
                             }
@@ -697,11 +625,9 @@ export default {
                                 PB_ACCESS_ROLE_ID,
                             ) ?? false;
 
-                        if (hasPBAccess) {
-                            logger.info(
-                                `PB Access permission override: ${interaction.user.tag} used /${commandName}`,
-                            );
-                        } else {
+                        if (
+                            !hasPBAccess
+                        ) {
                             const permissionAllowed =
                                 await enforceDefaultCommandPermissions(
                                     interaction,
@@ -709,13 +635,20 @@ export default {
                                     {
                                         source:
                                             'interactionCreate',
+
                                         guildConfig,
                                     },
                                 );
 
-                            if (!permissionAllowed) {
+                            if (
+                                !permissionAllowed
+                            ) {
                                 return;
                             }
+                        } else {
+                            logger.info(
+                                `PB Access permission override: ${interaction.user.tag} used /${commandName}`,
+                            );
                         }
 
                         // ==================================================
@@ -770,7 +703,9 @@ export default {
 
                                 await interaction
                                     .respond([])
-                                    .catch(() => {});
+                                    .catch(
+                                        () => {},
+                                    );
                             }
 
                             return;
@@ -778,7 +713,9 @@ export default {
 
                         await interaction
                             .respond([])
-                            .catch(() => {});
+                            .catch(
+                                () => {},
+                            );
 
                         return;
                     }
@@ -790,40 +727,6 @@ export default {
                     if (
                         interaction.isButton()
                     ) {
-                        if (
-                            interaction.customId.startsWith(
-                                'shared_todo_',
-                            )
-                        ) {
-                            const parts =
-                                interaction.customId.split(
-                                    '_',
-                                );
-
-                            const buttonType =
-                                parts
-                                    .slice(0, 3)
-                                    .join('_');
-
-                            const listId =
-                                parts[3];
-
-                            const button =
-                                client.buttons?.get(
-                                    buttonType,
-                                );
-
-                            if (button) {
-                                await button.execute(
-                                    interaction,
-                                    client,
-                                    [listId],
-                                );
-                            }
-
-                            return;
-                        }
-
                         const [
                             customId,
                             ...args
@@ -837,7 +740,9 @@ export default {
                                 customId,
                             );
 
-                        if (!button) {
+                        if (
+                            !button
+                        ) {
                             if (
                                 !interaction.customId.includes(
                                     ':',
@@ -853,12 +758,6 @@ export default {
                                 `No button handler found for ${customId}`,
                                 ErrorTypes.CONFIGURATION,
                                 'This button is not available.',
-                                withTraceContext(
-                                    {
-                                        customId,
-                                    },
-                                    interactionTraceContext,
-                                ),
                             );
                         }
 
@@ -891,7 +790,9 @@ export default {
                                 customId,
                             );
 
-                        if (!selectMenu) {
+                        if (
+                            !selectMenu
+                        ) {
                             if (
                                 !interaction.customId.includes(
                                     ':',
@@ -907,12 +808,6 @@ export default {
                                 `No select menu handler found for ${customId}`,
                                 ErrorTypes.CONFIGURATION,
                                 'This select menu is not available.',
-                                withTraceContext(
-                                    {
-                                        customId,
-                                    },
-                                    interactionTraceContext,
-                                ),
                             );
                         }
 
@@ -989,7 +884,9 @@ export default {
                                 customId,
                             );
 
-                        if (!modal) {
+                        if (
+                            !modal
+                        ) {
                             if (
                                 !interaction.customId.includes(
                                     ':',
@@ -1002,12 +899,6 @@ export default {
                                 `No modal handler found for ${customId}`,
                                 ErrorTypes.CONFIGURATION,
                                 'This form is not available.',
-                                withTraceContext(
-                                    {
-                                        customId,
-                                    },
-                                    interactionTraceContext,
-                                ),
                             );
                         }
 
@@ -1021,24 +912,31 @@ export default {
                     }
                 } catch (error) {
                     logger.error(
-                        '❌ Unhandled error in interactionCreate:',
+                        '❌ Unhandled interaction error:',
                         {
                             event:
                                 'interaction.unhandled_error',
+
                             errorCode:
                                 ErrorCodes.INTERACTION_UNHANDLED,
+
                             error:
                                 error?.stack ||
                                 error?.message ||
                                 error,
+
                             traceId:
-                                interactionTraceContext.traceId,
+                                traceContext.traceId,
+
                             interactionId:
                                 interaction.id,
+
                             guildId:
                                 interaction.guildId,
+
                             userId:
                                 interaction.user?.id,
+
                             commandName:
                                 interaction.commandName,
                         },
@@ -1054,23 +952,29 @@ export default {
                                         interaction.isChatInputCommand()
                                             ? 'command'
                                             : 'interaction',
+
                                     commandName:
                                         interaction.commandName,
+
                                     customId:
                                         interaction.customId,
+
                                     subtype:
                                         COMMAND_ERROR_SUBTYPES[
                                             interaction.commandName
                                         ] ||
                                         error?.context
                                             ?.subtype,
+
                                     source:
                                         'interactionCreate',
                                 },
-                                interactionTraceContext,
+                                traceContext,
                             ),
                         );
-                    } catch (replyError) {
+                    } catch (
+                        replyError
+                    ) {
                         logger.error(
                             'Failed to send fallback error response:',
                             replyError,
