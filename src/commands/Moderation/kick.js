@@ -1,122 +1,92 @@
-import {
-    SlashCommandBuilder,
-    PermissionFlagsBits,
-} from 'discord.js';
-
+import { SlashCommandBuilder, PermissionFlagsBits } from 'discord.js';
 import { successEmbed } from '../../utils/embeds.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
-import {
-    ModerationService,
-} from '../../services/moderation/moderationService.js';
-
-import {
-    TitanBotError,
-    ErrorTypes,
-} from '../../utils/errorHandler.js';
-
-import {
-    isModerationExempt,
-} from '../../utils/moderation.js';
+import { ModerationService } from '../../services/moderation/moderationService.js';
+import { TitanBotError, ErrorTypes } from '../../utils/errorHandler.js';
+import { isModerationExempt } from '../../utils/moderation.js';
 
 export default {
     data: new SlashCommandBuilder()
-        .setName('kick')
-        .setDescription('Kick a user from the server')
-
+        .setName("kick")
+        .setDescription("Kick a user from the server")
         .addUserOption((option) =>
             option
-                .setName('target')
-                .setDescription('The user to kick')
-                .setRequired(true)
+                .setName("target")
+                .setDescription("The user to kick")
+                .setRequired(true),
         )
-
         .addStringOption((option) =>
-            option
-                .setName('reason')
-                .setDescription('Reason for the kick')
+            option.setName("reason").setDescription("Reason for the kick"),
         )
+        .setDefaultMemberPermissions(PermissionFlagsBits.KickMembers),
 
-        .setDefaultMemberPermissions(
-            PermissionFlagsBits.KickMembers
-        ),
-
-    category: 'moderation',
+    category: "moderation",
 
     async execute(interaction, config, client) {
-        const targetUser =
-            interaction.options.getUser('target');
-
-        const member =
-            interaction.options.getMember('target');
-
+        const targetUser = interaction.options.getUser("target");
+        const member = interaction.options.getMember("target");
         const reason =
-            interaction.options.getString('reason') ||
-            'No reason provided';
+            interaction.options.getString("reason") ||
+            "No reason provided";
 
         if (!targetUser) {
             throw new TitanBotError(
                 'Missing target user',
                 ErrorTypes.USER_INPUT,
                 'You must specify a user to kick.',
-                {
-                    subtype: 'invalid_user',
-                }
+                { subtype: 'invalid_user' },
             );
         }
 
         if (isModerationExempt(targetUser.id)) {
             throw new TitanBotError(
-                'User is moderation exempt',
+                "User is moderation exempt",
                 ErrorTypes.VALIDATION,
-                'This user is exempt from all moderation actions.'
+                "This user is exempt from all moderation actions.",
             );
         }
 
         if (targetUser.id === interaction.user.id) {
             throw new TitanBotError(
-                'Cannot kick self',
+                "Cannot kick self",
                 ErrorTypes.VALIDATION,
-                'You cannot kick yourself.'
+                "You cannot kick yourself.",
             );
         }
 
         if (targetUser.id === client.user.id) {
             throw new TitanBotError(
-                'Cannot kick bot',
+                "Cannot kick bot",
                 ErrorTypes.VALIDATION,
-                'You cannot kick the bot.'
+                "You cannot kick the bot.",
             );
         }
 
         if (!member) {
             throw new TitanBotError(
-                'Target not found',
+                "Target not found",
                 ErrorTypes.USER_INPUT,
-                'The target user is not currently in this server.',
-                {
-                    subtype: 'user_not_found',
-                }
+                "The target user is not currently in this server.",
+                { subtype: 'user_not_found' },
             );
         }
 
-        const result =
-            await ModerationService.kickUser({
-                guild: interaction.guild,
-                member,
-                moderator: interaction.member,
-                reason,
-            });
+        const result = await ModerationService.kickUser({
+            guild: interaction.guild,
+            member,
+            moderator: interaction.member,
+            reason,
+        });
 
-        await InteractionHelper.universalReply(
-            interaction,
-            {
-                embeds: [
-                    successEmbed(
-                        `Kicked ${targetUser}`,
-                        `**User:** ${targetUser} (\`${targetUser.id}\`)\n**Reason:** ${reason}\n**Case ID:** #${result.caseId}`,
-                    ),
-                ],
-            }
-        );
+        await InteractionHelper.universalReply(interaction, {
+            embeds: [
+                successEmbed(
+                    `User Kicked`,
+                    `**User:** ${targetUser} (\`${targetUser.id}\`)\n` +
+                    `**Reason:** ${reason}\n` +
+                    `**Case ID:** #${result.caseId}`,
+                ),
+            ],
+        });
     },
 };

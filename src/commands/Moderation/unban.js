@@ -7,29 +7,28 @@ import { InteractionHelper } from '../../utils/interactionHelper.js';
 
 export default {
     data: new SlashCommandBuilder()
-        .setName('unban')
-        .setDescription('Unban a user from the server')
+        .setName("unban")
+        .setDescription("Unban a user from the server")
         .addStringOption(option =>
             option
-                .setName('target')
-                .setDescription('The ID (or mention) of the user to unban')
+                .setName("target")
+                .setDescription("The ID (or mention) of the user to unban")
                 .setRequired(true),
         )
         .addStringOption(option =>
-            option
-                .setName('reason')
-                .setDescription('Reason for the unban')
+            option.setName("reason")
+                .setDescription("Reason for the unban")
                 .setRequired(false),
         )
         .setDefaultMemberPermissions(PermissionFlagsBits.BanMembers),
 
-    category: 'moderation',
+    category: "moderation",
 
     async execute(interaction, config, client) {
         const deferSuccess = await InteractionHelper.safeDefer(interaction);
 
         if (!deferSuccess) {
-            logger.warn('Unban interaction defer failed', {
+            logger.warn(`Unban interaction defer failed`, {
                 userId: interaction.user.id,
                 guildId: interaction.guildId,
                 commandName: 'unban',
@@ -37,7 +36,7 @@ export default {
             return;
         }
 
-        const rawTarget = interaction.options.getString('target');
+        const rawTarget = interaction.options.getString("target");
         const targetId = rawTarget.replace(/[<@!>]/g, '').trim();
 
         if (!/^\d{17,20}$/.test(targetId)) {
@@ -57,8 +56,8 @@ export default {
         }
 
         const reason =
-            interaction.options.getString('reason') ||
-            'No reason provided';
+            interaction.options.getString("reason") ||
+            "No reason provided";
 
         const result = await ModerationService.unbanUser({
             guild: interaction.guild,
@@ -70,8 +69,10 @@ export default {
         await InteractionHelper.safeEditReply(interaction, {
             embeds: [
                 successEmbed(
-                    `Unbanned ${targetUser}`,
-                    `**User:** ${targetUser} (\`${targetUser.id}\`)\n**Reason:** ${reason}\n**Case ID:** #${result.caseId}`,
+                    `User Unbanned`,
+                    `**User:** ${targetUser} (\`${targetUser.id}\`)\n` +
+                    `**Reason:** ${reason}\n` +
+                    `**Case ID:** #${result.caseId}`,
                 ),
             ],
         });

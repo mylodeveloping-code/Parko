@@ -10,37 +10,35 @@ import { logger } from '../../utils/logger.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
 import {
     replyUserError,
-    ErrorTypes,
+    ErrorTypes
 } from '../../utils/errorHandler.js';
 
 export default {
     data: new SlashCommandBuilder()
-        .setName('lock')
+        .setName("lock")
         .setDescription(
-            'Locks the current channel (prevents @everyone from sending messages).'
+            "Locks the current channel (prevents @everyone from sending messages).",
         )
         .setDefaultMemberPermissions(
             PermissionFlagsBits.ManageChannels
         ),
 
-    category: 'moderation',
+    category: "moderation",
 
     async execute(interaction, config, client) {
-        const deferSuccess =
-            await InteractionHelper.safeDefer(interaction);
+        const deferSuccess = await InteractionHelper.safeDefer(interaction);
 
         if (!deferSuccess) {
-            logger.warn('Lock interaction defer failed', {
+            logger.warn(`Lock interaction defer failed`, {
                 userId: interaction.user.id,
                 guildId: interaction.guildId,
-                commandName: 'lock',
+                commandName: 'lock'
             });
             return;
         }
 
         const channel = interaction.channel;
-        const everyoneRole =
-            interaction.guild.roles.everyone;
+        const everyoneRole = interaction.guild.roles.everyone;
 
         try {
             const currentPermissions =
@@ -53,7 +51,7 @@ export default {
             ) {
                 return await replyUserError(interaction, {
                     type: ErrorTypes.UNKNOWN,
-                    message: `${channel} is already locked.`,
+                    message: `${channel} is already locked.`
                 });
             }
 
@@ -62,50 +60,42 @@ export default {
                 { SendMessages: false },
                 {
                     type: 0,
-                    reason:
-                        `Channel locked by ${interaction.user.tag}`,
-                }
+                    reason: `Channel locked by ${interaction.user.tag}`
+                },
             );
 
             await logEvent({
                 client,
                 guild: interaction.guild,
                 event: {
-                    action: 'Channel Locked',
+                    action: "Channel Locked",
                     target: channel.toString(),
-                    executor:
-                        `${interaction.user.tag} (${interaction.user.id})`,
+                    executor: `${interaction.user.tag} (${interaction.user.id})`,
                     metadata: {
                         channelId: channel.id,
-                        category:
-                            channel.parent?.name || 'None',
-                        moderatorId: interaction.user.id,
-                    },
-                },
+                        category: channel.parent?.name || 'None',
+                        moderatorId: interaction.user.id
+                    }
+                }
             });
 
-            await InteractionHelper.safeEditReply(
-                interaction,
-                {
-                    embeds: [
-                        successEmbed(
-                            `Locked ${channel}`,
-                            `**Channel:** ${channel} (\`${channel.id}\`)\n**Action:** The channel is now locked and @everyone cannot send messages.`,
-                        ),
-                    ],
-                }
-            );
+            await InteractionHelper.safeEditReply(interaction, {
+                embeds: [
+                    successEmbed(
+                        `Channel Locked`,
+                        `**Channel:** ${channel} (\`${channel.id}\`)\n` +
+                        `**Action:** The channel has been locked.`,
+                    ),
+                ],
+            });
         } catch (error) {
-            logger.error(
-                'Lock command error:',
-                error
-            );
+            logger.error('Lock command error:', error);
 
             await replyUserError(interaction, {
                 type: ErrorTypes.PERMISSION,
                 message:
-                    'An unexpected error occurred while trying to lock the channel. Check my permissions (I need Manage Channels).',
+                    'An unexpected error occurred while trying to lock the channel. Check my permissions (I need \'Manage Channels\').'
             });
         }
-    },
+    }
 };

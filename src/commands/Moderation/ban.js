@@ -5,19 +5,9 @@ import {
 
 import { successEmbed } from '../../utils/embeds.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
-
-import {
-    ModerationService,
-} from '../../services/moderation/moderationService.js';
-
-import {
-    TitanBotError,
-    ErrorTypes,
-} from '../../utils/errorHandler.js';
-
-import {
-    isModerationExempt,
-} from '../../utils/moderation.js';
+import { ModerationService } from '../../services/moderation/moderationService.js';
+import { TitanBotError, ErrorTypes } from '../../utils/errorHandler.js';
+import { isModerationExempt } from '../../utils/moderation.js';
 
 export default {
     data: new SlashCommandBuilder()
@@ -113,7 +103,7 @@ export default {
             {
                 embeds: [
                     successEmbed(
-                        `Banned ${user}`,
+                        `User Banned`,
                         `**User:** ${user} (\`${user.id}\`)\n` +
                         `**Reason:** ${reason}\n` +
                         `**Length:** ${result.length || 'Permanent'}\n` +
