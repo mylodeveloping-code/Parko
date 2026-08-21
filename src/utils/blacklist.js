@@ -1,115 +1,255 @@
-import {
-    SlashCommandBuilder,
-    PermissionFlagsBits,
-} from 'discord.js';
+import fs from 'fs';
+import path from 'path';
 
-import { successEmbed } from '../../utils/embeds.js';
-import { InteractionHelper } from '../../utils/interactionHelper.js';
+import { fileURLToPath } from 'url';
 
-import {
-    blacklistUser,
-    isBlacklisted,
-} from '../../utils/blacklist.js';
+const __filename =
+    fileURLToPath(import.meta.url);
 
-import {
-    TitanBotError,
-    ErrorTypes,
-} from '../../utils/errorHandler.js';
+const __dirname =
+    path.dirname(__filename);
+
+/*
+ * Store blacklist data outside src/ so it survives application
+ * restarts when the filesystem is persistent.
+ *
+ * Falls back gracefully if the file cannot be read.
+ */
+
+const DATA_DIRECTORY =
+    path.join(
+        __dirname,
+        '../../data'
+    );
+
+const BLACKLIST_FILE =
+    path.join(
+        DATA_DIRECTORY,
+        'blacklist.json'
+    );
+
+let blacklist =
+    new Set();
+
+function ensureDataDirectory() {
+    try {
+        if (
+            !fs.existsSync(
+                DATA_DIRECTORY
+            )
+        ) {
+            fs.mkdirSync(
+                DATA_DIRECTORY,
+                {
+                    recursive: true,
+                }
+            );
+        }
+
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+function loadBlacklist() {
+    try {
+        ensureDataDirectory();
+
+        if (
+            !fs.existsSync(
+                BLACKLIST_FILE
+            )
+        ) {
+            blacklist = new Set();
+            return;
+        }
+
+        const raw =
+            fs.readFileSync(
+                BLACKLIST_FILE,
+                'utf8'
+            );
+
+        const parsed =
+            JSON.parse(raw);
+
+        if (Array.isArray(parsed)) {
+            blacklist =
+                new Set(
+                    parsed
+                        .map(
+                            id =>
+                                String(id)
+                                    .trim()
+                        )
+                        .filter(Boolean)
+                );
+        } else {
+            blacklist =
+                new Set();
+        }
+    } catch {
+        blacklist =
+            new Set();
+    }
+}
+
+function saveBlacklist() {
+    try {
+        if (
+            !ensureDataDirectory()
+        ) {
+            return false;
+        }
+
+        fs.writeFileSync(
+            BLACKLIST_FILE,
+            JSON.stringify(
+                [...blacklist],
+                null,
+                2
+            ),
+            'utf8'
+        );
+
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+function normalizeUserId(
+    userId
+) {
+    if (
+        userId === null ||
+        userId === undefined
+    ) {
+        return null;
+    }
+
+    const normalized =
+        String(userId).trim();
+
+    if (
+        !/^\d{17,20}$/.test(
+            normalized
+        )
+    ) {
+        return null;
+    }
+
+    return normalized;
+}
+
+/**
+ * Check whether a Discord user is blacklisted.
+ */
+export function isBlacklisted(
+    userId
+) {
+    const normalized =
+        normalizeUserId(
+            userId
+        );
+
+    if (!normalized) {
+        return false;
+    }
+
+    return blacklist.has(
+        normalized
+    );
+}
+
+/**
+ * Add a user to the blacklist.
+ */
+export function blacklistUser(
+    userId
+) {
+    const normalized =
+        normalizeUserId(
+            userId
+        );
+
+    if (!normalized) {
+        return false;
+    }
+
+    if (
+        blacklist.has(
+            normalized
+        )
+    ) {
+        return false;
+    }
+
+    blacklist.add(
+        normalized
+    );
+
+    return saveBlacklist();
+}
+
+/**
+ * Remove a user from the blacklist.
+ */
+export function unblacklistUser(
+    userId
+) {
+    const normalized =
+        normalizeUserId(
+            userId
+        );
+
+    if (!normalized) {
+        return false;
+    }
+
+    if (
+        !blacklist.has(
+            normalized
+        )
+    ) {
+        return false;
+    }
+
+    blacklist.delete(
+        normalized
+    );
+
+    return saveBlacklist();
+}
+
+/**
+ * Get every blacklisted user ID.
+ */
+export function getBlacklistedUsers() {
+    return [
+        ...blacklist,
+    ];
+}
+
+/**
+ * Clear the entire blacklist.
+ */
+export function clearBlacklist() {
+    blacklist.clear();
+
+    return saveBlacklist();
+}
+
+/*
+ * Load persisted blacklist data once when this module is imported.
+ */
+loadBlacklist();
 
 export default {
-    data: new SlashCommandBuilder()
-        .setName('bl')
-        .setDescription('Blacklist a user from using the bot')
-        .addStringOption((option) =>
-            option
-                .setName('user_id')
-                .setDescription('The Discord user ID to blacklist')
-                .setRequired(true)
-        )
-        .setDefaultMemberPermissions(
-            PermissionFlagsBits.ManageGuild
-        ),
-
-    category: 'moderation',
-
-    async execute(interaction, config, client) {
-        const userId =
-            interaction.options
-                .getString('user_id')
-                ?.trim();
-
-        if (!userId) {
-            throw new TitanBotError(
-                'Missing user ID',
-                ErrorTypes.USER_INPUT,
-                'You must provide a Discord user ID.'
-            );
-        }
-
-        if (!/^\d{17,20}$/.test(userId)) {
-            throw new TitanBotError(
-                'Invalid user ID',
-                ErrorTypes.USER_INPUT,
-                'That does not appear to be a valid Discord user ID.'
-            );
-        }
-
-        if (userId === interaction.user.id) {
-            throw new TitanBotError(
-                'Cannot blacklist self',
-                ErrorTypes.VALIDATION,
-                'You cannot blacklist yourself.'
-            );
-        }
-
-        if (client.user && userId === client.user.id) {
-            throw new TitanBotError(
-                'Cannot blacklist bot',
-                ErrorTypes.VALIDATION,
-                'You cannot blacklist the bot.'
-            );
-        }
-
-        if (isBlacklisted(userId)) {
-            throw new TitanBotError(
-                'Already blacklisted',
-                ErrorTypes.VALIDATION,
-                `User ID \`${userId}\` is already blacklisted.`
-            );
-        }
-
-        const saved = blacklistUser(userId);
-
-        if (!saved) {
-            throw new TitanBotError(
-                'Blacklist failed',
-                ErrorTypes.INTERNAL,
-                'I could not save that blacklist entry.'
-            );
-        }
-
-        let userText = `User ID \`${userId}\``;
-
-        try {
-            const user =
-                await client.users.fetch(userId);
-
-            userText =
-                `${user} (\`${userId}\`)`;
-        } catch {
-            // User does not need to be fetchable.
-        }
-
-        await InteractionHelper.universalReply(
-            interaction,
-            {
-                embeds: [
-                    successEmbed(
-                        `Blacklisted ${userText}`,
-                        `**User:** ${userText}\n**Action:** This user has been blacklisted and can no longer use commands from this bot.`,
-                    ),
-                ],
-            }
-        );
-    },
+    isBlacklisted,
+    blacklistUser,
+    unblacklistUser,
+    getBlacklistedUsers,
+    clearBlacklist,
 };
