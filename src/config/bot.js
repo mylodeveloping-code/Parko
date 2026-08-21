@@ -91,7 +91,7 @@ export const botConfig = {
     }, 
  
     footer: { 
-      text: "Parko", 
+      text: "Vivid", 
       icon: null, 
     }, 
  
