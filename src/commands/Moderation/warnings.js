@@ -28,32 +28,213 @@ import {
     InteractionHelper,
 } from '../../utils/interactionHelper.js';
 
-// Warning role IDs
+// ============================================================
+// WARNING ROLES
+// ============================================================
+
 const WARNING_ROLE_IDS = [
     '1537643745720148018',
     '1533577410367455242',
     '1536917870087376936',
 ];
 
-export default {
-    data: new SlashCommandBuilder()
-        .setName('warnings')
-        .setDescription('View all warnings for a user')
+// ============================================================
+// REMOVE ALL WARNING ROLES
+// ============================================================
 
-        .addUserOption((o) =>
-            o
-                .setName('target')
-                .setRequired(true)
-                .setDescription(
-                    'User to check warnings for'
+async function removeAllWarningRoles(
+    guild,
+    userId,
+    moderatorTag
+) {
+    if (
+        !guild ||
+        !userId
+    ) {
+        return {
+            success: false,
+            removed: [],
+            reason:
+                'Missing guild or user ID.',
+        };
+    }
+
+    // --------------------------------------------------------
+    // Fetch a fresh GuildMember
+    // --------------------------------------------------------
+
+    let member = null;
+
+    try {
+        member =
+            await guild.members.fetch(
+                userId
+            );
+    } catch (error) {
+        /*
+         * The user may have left the server. In that case there
+         * are no Discord roles to remove.
+         */
+        if (
+            error?.code === 10007
+        ) {
+            logger.info(
+                `User ${userId} is no longer in ${guild.name}; no warning roles need to be removed.`
+            );
+
+            return {
+                success: true,
+                removed: [],
+                reason:
+                    'User is no longer in the server.',
+            };
+        }
+
+        logger.error(
+            `Failed to fetch ${userId} while clearing warning roles:`,
+            error
+        );
+
+        return {
+            success: false,
+            removed: [],
+            reason:
+                'Could not fetch the member.',
+        };
+    }
+
+    if (!member) {
+        return {
+            success: true,
+            removed: [],
+            reason:
+                'Member not found.',
+        };
+    }
+
+    const removedRoles = [];
+
+    // --------------------------------------------------------
+    // Remove every warning role individually
+    // --------------------------------------------------------
+
+    for (
+        const roleId of WARNING_ROLE_IDS
+    ) {
+        try {
+            const role =
+                guild.roles.cache.get(
+                    roleId
+                ) ||
+                await guild.roles.fetch(
+                    roleId
+                ).catch(
+                    () => null
+                );
+
+            if (!role) {
+                logger.warn(
+                    `Warning role ${roleId} does not exist in guild ${guild.id}.`
+                );
+
+                continue;
+            }
+
+            if (
+                !member.roles.cache.has(
+                    roleId
                 )
-        )
+            ) {
+                continue;
+            }
 
-        .setDefaultMemberPermissions(
-            PermissionFlagsBits.ModerateMembers
-        ),
+            if (
+                !role.editable
+            ) {
+                logger.error(
+                    `Cannot remove warning role ${roleId} from ${member.user.tag}: role is not editable.`
+                );
 
-    category: 'moderation',
+                continue;
+            }
+
+            await member.roles.remove(
+                role,
+                `All warnings cleared by ${moderatorTag}`
+            );
+
+            removedRoles.push(
+                roleId
+            );
+
+            logger.info(
+                `Removed warning role ${roleId} from ${member.user.tag}.`,
+                {
+                    userId:
+                        member.id,
+
+                    guildId:
+                        guild.id,
+
+                    moderator:
+                        moderatorTag,
+                }
+            );
+        } catch (error) {
+            logger.error(
+                `Failed to remove warning role ${roleId} from ${member.user?.tag ?? userId}:`,
+                error
+            );
+        }
+    }
+
+    return {
+        success: true,
+        removed: removedRoles,
+        reason:
+            removedRoles.length > 0
+                ? null
+                : 'No warning roles were currently assigned.',
+    };
+}
+
+// ============================================================
+// COMMAND
+// ============================================================
+
+export default {
+    data:
+        new SlashCommandBuilder()
+            .setName(
+                'warnings'
+            )
+
+            .setDescription(
+                'View all warnings for a user'
+            )
+
+            .addUserOption(
+                option =>
+                    option
+                        .setName(
+                            'target'
+                        )
+
+                        .setRequired(
+                            true
+                        )
+
+                        .setDescription(
+                            'User to check warnings for'
+                        )
+            )
+
+            .setDefaultMemberPermissions(
+                PermissionFlagsBits.ModerateMembers
+            ),
+
+    category:
+        'moderation',
 
     async execute(
         interaction,
@@ -83,14 +264,17 @@ export default {
             return;
         }
 
-        // ============================================
+        // ========================================================
         // GET USER
-        // ============================================
+        // ========================================================
 
         const target =
             interaction.options.getUser(
                 'target'
             );
+
+        const guild =
+            interaction.guild;
 
         const guildId =
             interaction.guildId;
@@ -107,7 +291,9 @@ export default {
                             description:
                                 'I could not resolve that Discord user.',
                         }).setColor(
-                            getColor('error')
+                            getColor(
+                                'error'
+                            )
                         ),
                     ],
                 }
@@ -116,9 +302,9 @@ export default {
             return;
         }
 
-        // ============================================
+        // ========================================================
         // GET WARNINGS
-        // ============================================
+        // ========================================================
 
         const validWarnings =
             await WarningService.getWarnings(
@@ -129,11 +315,13 @@ export default {
         const totalWarns =
             validWarnings.length;
 
-        // ============================================
+        // ========================================================
         // NO WARNINGS
-        // ============================================
+        // ========================================================
 
-        if (totalWarns === 0) {
+        if (
+            totalWarns === 0
+        ) {
             await InteractionHelper.safeEditReply(
                 interaction,
                 {
@@ -145,7 +333,9 @@ export default {
                             description:
                                 'This user has no recorded warnings.',
                         }).setColor(
-                            getColor('success')
+                            getColor(
+                                'success'
+                            )
                         ),
                     ],
                 }
@@ -154,9 +344,9 @@ export default {
             return;
         }
 
-        // ============================================
+        // ========================================================
         // BUILD EMBED
-        // ============================================
+        // ========================================================
 
         const embed =
             createEmbed({
@@ -166,49 +356,60 @@ export default {
                 description:
                     `Total Warnings: **${totalWarns}**`,
             }).setColor(
-                getColor('warning')
+                getColor(
+                    'warning'
+                )
             );
 
         const warningFields =
             validWarnings
-                .map((warning, index) => {
-                    const discordTimestamp =
-                        Math.floor(
-                            warning.timestamp /
-                            1000
-                        );
+                .map(
+                    (
+                        warning,
+                        index
+                    ) => {
+                        const discordTimestamp =
+                            Math.floor(
+                                warning.timestamp /
+                                    1000
+                            );
 
-                    const reason =
-                        String(
-                            warning.reason ??
-                            'No reason provided'
-                        );
+                        const reason =
+                            String(
+                                warning.reason ??
+                                    'No reason provided'
+                            );
 
-                    return {
-                        name:
-                            `[#${index + 1}] Reason: ` +
-                            reason.substring(
-                                0,
-                                100
-                            ),
+                        return {
+                            name:
+                                `[#${index + 1}] Reason: ` +
+                                reason.substring(
+                                    0,
+                                    100
+                                ),
 
-                        value:
-                            `**Moderator:** <@${warning.moderatorId}>\n` +
-                            `**Date:** <t:${discordTimestamp}:F> ` +
-                            `(<t:${discordTimestamp}:R>)`,
+                            value:
+                                `**Moderator:** <@${warning.moderatorId}>\n` +
+                                `**Date:** <t:${discordTimestamp}:F> ` +
+                                `(<t:${discordTimestamp}:R>)`,
 
-                        inline: false,
-                    };
-                })
-                .slice(0, 25);
+                            inline:
+                                false,
+                        };
+                    }
+                )
+                .slice(
+                    0,
+                    25
+                );
 
         embed.addFields(
             warningFields
         );
 
-        // ============================================
+        // ========================================================
         // BUTTONS
-        // ============================================
+        // ========================================================
 
         const actionRow =
             new ActionRowBuilder()
@@ -217,9 +418,11 @@ export default {
                         .setCustomId(
                             `warning_delete_specific:${target.id}:${interaction.user.id}`
                         )
+
                         .setLabel(
                             'Delete Specific Warning'
                         )
+
                         .setStyle(
                             ButtonStyle.Danger
                         ),
@@ -228,23 +431,24 @@ export default {
                         .setCustomId(
                             `warning_clear_all:${target.id}:${interaction.user.id}`
                         )
+
                         .setLabel(
                             'Clear All Warnings'
                         )
+
                         .setStyle(
                             ButtonStyle.Danger
                         )
                 );
 
-        // ============================================
+        // ========================================================
         // LOG
-        // ============================================
+        // ========================================================
 
         await logEvent({
             client,
 
-            guild:
-                interaction.guild,
+            guild,
 
             event: {
                 action:
@@ -272,9 +476,9 @@ export default {
             },
         });
 
-        // ============================================
+        // ========================================================
         // SEND RESPONSE
-        // ============================================
+        // ========================================================
 
         await InteractionHelper.safeEditReply(
             interaction,
@@ -289,9 +493,9 @@ export default {
             }
         );
 
-        // ============================================
+        // ========================================================
         // BUTTON COLLECTOR
-        // ============================================
+        // ========================================================
 
         try {
             const reply =
@@ -300,14 +504,11 @@ export default {
             const collector =
                 reply.createMessageComponentCollector({
                     filter:
-                        (buttonInteraction) => {
-                            return (
-                                buttonInteraction.customId ===
-                                    `warning_clear_all:${target.id}:${interaction.user.id}` &&
-                                buttonInteraction.user.id ===
-                                    interaction.user.id
-                            );
-                        },
+                        buttonInteraction =>
+                            buttonInteraction.user.id ===
+                                interaction.user.id &&
+                            buttonInteraction.customId ===
+                                `warning_clear_all:${target.id}:${interaction.user.id}`,
 
                     time:
                         15 * 60 * 1000,
@@ -315,77 +516,49 @@ export default {
 
             collector.on(
                 'collect',
-                async (
-                    buttonInteraction
-                ) => {
+                async buttonInteraction => {
                     try {
-                        // A user can have warnings even if
-                        // they have since left the server.
-                        //
-                        // Try to fetch the member, but don't
-                        // treat failure as a warning-system error.
-
-                        const member =
-                            await interaction.guild.members
-                                .fetch(
-                                    target.id
-                                )
-                                .catch(
-                                    () => null
-                                );
-
-                        if (member) {
-                            for (
-                                const roleId
-                                of WARNING_ROLE_IDS
-                            ) {
-                                if (
-                                    member.roles.cache.has(
-                                        roleId
-                                    )
-                                ) {
-                                    await member.roles.remove(
-                                        roleId,
-                                        `All warnings cleared by ${interaction.user.tag}`
-                                    );
-                                }
-                            }
-
-                            logger.info(
-                                `Removed warning roles from ${target.tag} after clearing warnings`,
-                                {
-                                    userId:
-                                        target.id,
-
-                                    guildId,
-
-                                    moderatorId:
-                                        interaction.user.id,
-
-                                    removedRoles:
-                                        WARNING_ROLE_IDS,
-                                }
-                            );
-                        } else {
-                            logger.info(
-                                `User ${target.id} is no longer in the guild; no warning roles needed removal`,
-                                {
-                                    userId:
-                                        target.id,
-
-                                    guildId,
-
-                                    moderatorId:
-                                        interaction.user.id,
-                                }
-                            );
-                        }
+                        // ==================================================
+                        // ACKNOWLEDGE BUTTON IMMEDIATELY
+                        // ==================================================
 
                         await buttonInteraction.deferUpdate();
 
-                    } catch (roleError) {
-                        logger.error(
-                            `Failed to remove warning roles from ${target.tag}`,
+                        // ==================================================
+                        // CLEAR WARNING ROLES
+                        // ==================================================
+
+                        const roleResult =
+                            await removeAllWarningRoles(
+                                guild,
+                                target.id,
+                                interaction.user.tag
+                            );
+
+                        if (
+                            !roleResult.success
+                        ) {
+                            logger.warn(
+                                `Warning roles could not be completely removed from ${target.tag}.`,
+                                {
+                                    userId:
+                                        target.id,
+
+                                    guildId,
+
+                                    moderatorId:
+                                        interaction.user.id,
+
+                                    reason:
+                                        roleResult.reason,
+                                }
+                            );
+
+                            return;
+                        }
+
+                        logger.info(
+                            `Removed all warning roles from ${target.tag} after warnings were cleared.`,
                             {
                                 userId:
                                     target.id,
@@ -395,14 +568,106 @@ export default {
                                 moderatorId:
                                     interaction.user.id,
 
-                                error:
-                                    roleError,
+                                removedRoles:
+                                    roleResult.removed,
+                            }
+                        );
+
+                        // ==================================================
+                        // DISABLE THE BUTTONS
+                        // ==================================================
+
+                        try {
+                            const disabledRow =
+                                new ActionRowBuilder()
+                                    .addComponents(
+                                        new ButtonBuilder()
+                                            .setCustomId(
+                                                `warning_delete_specific:${target.id}:${interaction.user.id}`
+                                            )
+
+                                            .setLabel(
+                                                'Delete Specific Warning'
+                                            )
+
+                                            .setStyle(
+                                                ButtonStyle.Danger
+                                            )
+
+                                            .setDisabled(
+                                                true
+                                            ),
+
+                                        new ButtonBuilder()
+                                            .setCustomId(
+                                                `warning_clear_all:${target.id}:${interaction.user.id}`
+                                            )
+
+                                            .setLabel(
+                                                'Clear All Warnings'
+                                            )
+
+                                            .setStyle(
+                                                ButtonStyle.Danger
+                                            )
+
+                                            .setDisabled(
+                                                true
+                                            )
+                                    );
+
+                            await interaction.editReply({
+                                embeds: [
+                                    createEmbed({
+                                        title:
+                                            `Warnings: ${target.tag}`,
+
+                                        description:
+                                            'All warnings have been cleared.',
+                                    }).setColor(
+                                        getColor(
+                                            'success'
+                                        )
+                                    ),
+                                ],
+
+                                components: [
+                                    disabledRow,
+                                ],
+                            });
+                        } catch (editError) {
+                            logger.debug(
+                                'Could not update the warnings message after clearing roles:',
+                                editError
+                            );
+                        }
+                    } catch (error) {
+                        logger.error(
+                            `Failed while clearing warning roles for ${target.tag}:`,
+                            {
+                                userId:
+                                    target.id,
+
+                                guildId,
+
+                                moderatorId:
+                                    interaction.user.id,
+
+                                error,
                             }
                         );
 
                         await buttonInteraction
-                            .deferUpdate()
-                            .catch(() => {});
+                            .editReply({
+                                content:
+                                    '❌ I could not remove the warning roles from this user.',
+
+                                embeds: [],
+                                components: [],
+                            })
+                            .catch(
+                                () => {}
+                            );
                     }
                 }
             );
@@ -415,13 +680,17 @@ export default {
                     );
                 }
             );
-        } catch (collectorError) {
+        } catch (
+            collectorError
+        ) {
             logger.error(
                 'Failed to create warning button collector',
                 {
                     guildId,
+
                     userId:
                         target.id,
+
                     error:
                         collectorError,
                 }
