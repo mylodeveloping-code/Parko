@@ -1,11 +1,8 @@
 import {
     SlashCommandBuilder,
     PermissionFlagsBits,
+    EmbedBuilder,
 } from 'discord.js';
-
-import {
-    warningEmbed,
-} from '../../utils/embeds.js';
 
 import {
     logger,
@@ -52,10 +49,9 @@ function parsePrefixDuration(value) {
         return null;
     }
 
-    const input =
-        String(value)
-            .trim()
-            .toLowerCase();
+    const input = String(value)
+        .trim()
+        .toLowerCase();
 
     // Plain number = minutes.
     if (/^\d+$/.test(input)) {
@@ -74,10 +70,9 @@ function parsePrefixDuration(value) {
         };
     }
 
-    const match =
-        input.match(
-            /^(\d+(?:\.\d+)?)(m|h|d|w)$/
-        );
+    const match = input.match(
+        /^(\d+(?:\.\d+)?)(m|h|d|w)$/
+    );
 
     if (!match) {
         return null;
@@ -160,41 +155,34 @@ function formatDurationDisplay(minutes) {
 }
 
 // ============================================================
-// RESOLVE PREFIX USER
-// ============================================================
-//
-// Supports:
-//
-// >mute 1393674823514980352 10m test
-// >mute @user 10m test
-// >mute <@1393674823514980352> 10m test
-// >mute <@!1393674823514980352> 10m test
-//
+// PREFIX USER RESOLUTION
 // ============================================================
 
 async function resolvePrefixTarget(
     interaction,
     rawTarget
 ) {
-    if (!interaction.guild || !rawTarget) {
+    if (
+        !interaction.guild ||
+        !rawTarget
+    ) {
         return null;
     }
 
-    const input =
-        String(rawTarget)
-            .trim();
+    const input = String(rawTarget).trim();
 
-    // Discord mention.
-    const mentionMatch =
-        input.match(
-            /^<@!?(\d{17,20})>$/
-        );
+    // Accept:
+    // <@123456789>
+    // <@!123456789>
+    // 123456789
 
-    // Raw Discord ID.
-    const idMatch =
-        input.match(
-            /^(\d{17,20})$/
-        );
+    const mentionMatch = input.match(
+        /^<@!?(\d{17,20})>$/
+    );
+
+    const idMatch = input.match(
+        /^(\d{17,20})$/
+    );
 
     const userId =
         mentionMatch?.[1] ||
@@ -205,17 +193,62 @@ async function resolvePrefixTarget(
     }
 
     try {
-        return await interaction.guild.members.fetch(
-            userId
-        );
+        // First try the cache.
+        const cachedMember =
+            interaction.guild.members.cache.get(
+                userId
+            );
+
+        if (cachedMember) {
+            return cachedMember;
+        }
+
+        // Force a REST fetch of the guild member.
+        const member =
+            await interaction.guild.members.fetch({
+                user: userId,
+                force: true,
+            });
+
+        return member || null;
     } catch (error) {
         logger.debug(
-            `Unable to fetch timeout target ${userId} in guild ${interaction.guild.id}`,
-            error
+            `Unable to resolve prefix timeout target ${userId} in guild ${interaction.guild.id}`,
+            {
+                error,
+            }
         );
 
         return null;
     }
+}
+
+// ============================================================
+// MODERATION EMBED
+// ============================================================
+
+function createTimeoutEmbed({
+    userId,
+    duration,
+    reason,
+}) {
+    return new EmbedBuilder()
+        .setColor(0xFEE75C)
+        .setDescription(
+            `<@${userId}> has been timed out. | ${userId}`
+        )
+        .addFields(
+            {
+                name: 'Duration',
+                value: duration,
+                inline: true,
+            },
+            {
+                name: 'Reason',
+                value: reason,
+                inline: true,
+            }
+        );
 }
 
 // ============================================================
@@ -228,6 +261,7 @@ export default {
         .setDescription(
             'Timeout a user for a specific duration.'
         )
+
         .addUserOption((option) =>
             option
                 .setName('target')
@@ -236,6 +270,7 @@ export default {
                 )
                 .setRequired(true)
         )
+
         .addIntegerOption((option) =>
             option
                 .setName('duration')
@@ -247,6 +282,7 @@ export default {
                     ...durationChoices
                 )
         )
+
         .addStringOption((option) =>
             option
                 .setName('reason')
@@ -254,6 +290,7 @@ export default {
                     'Reason for the timeout'
                 )
         )
+
         .setDefaultMemberPermissions(
             PermissionFlagsBits.ModerateMembers
         ),
@@ -298,11 +335,13 @@ export default {
         if (!member) {
             await interaction.reply({
                 embeds: [
-                    warningEmbed(
-                        '❌ User Not Found',
-                        'I could not find that user in this server.\n\n' +
-                        '**Usage:** `>mute <user ID/@mention> <duration> [reason]`'
-                    ),
+                    new EmbedBuilder()
+                        .setColor(0xED4245)
+                        .setTitle('User Not Found')
+                        .setDescription(
+                            'I could not find that user in this server.\n\n' +
+                            '**Usage:** `>mute <user ID/@mention> <duration> [reason]`'
+                        ),
                 ],
             });
 
@@ -324,12 +363,14 @@ export default {
         if (!parsedDuration) {
             await interaction.reply({
                 embeds: [
-                    warningEmbed(
-                        '❌ Invalid Timeout Duration',
-                        'Please provide a valid timeout duration.\n\n' +
-                        '**Examples:** `10m`, `1h`, `6h`, `1d`, `1w`\n\n' +
-                        '**Usage:** `>mute <user ID/@mention> <duration> [reason]`'
-                    ),
+                    new EmbedBuilder()
+                        .setColor(0xED4245)
+                        .setTitle('Invalid Timeout Duration')
+                        .setDescription(
+                            'Please provide a valid timeout duration.\n\n' +
+                            '**Examples:** `10m`, `1h`, `6h`, `1d`, `1w`\n\n' +
+                            '**Usage:** `>mute <user ID/@mention> <duration> [reason]`'
+                        ),
                 ],
             });
 
@@ -420,25 +461,26 @@ export default {
             });
 
         // ====================================================
-        // PUBLIC RESPONSE
-        // ====================================================
-        //
-        // ModerationService handles the centralized
-        // moderation notification. Do not send another
-        // confirmation message here.
-        //
+        // RESPONSE
         // ====================================================
 
         await interaction.reply({
             embeds: [
-                warningEmbed(
-                    '⏳ Timeout Applied',
-                    `**User:** <@${targetUser.id}>\n` +
-                    `**Duration:** ${parsedDuration.display}\n` +
-                    `**Reason:** ${reason}\n` +
-                    `**Case ID:** #${result.caseId}`
-                ),
+                createTimeoutEmbed({
+                    userId:
+                        targetUser.id,
+
+                    duration:
+                        parsedDuration.display,
+
+                    reason,
+                }),
             ],
+            allowedMentions: {
+                users: [
+                    targetUser.id,
+                ],
+            },
         });
 
         logger.info(
@@ -498,10 +540,6 @@ export default {
             return;
         }
 
-        // ====================================================
-        // TARGET / DURATION / REASON
-        // ====================================================
-
         const targetUser =
             interaction.options.getUser(
                 'target'
@@ -522,11 +560,7 @@ export default {
             throw new TitanBotError(
                 'Missing target user',
                 ErrorTypes.USER_INPUT,
-                'You must specify a user to timeout.',
-                {
-                    subtype:
-                        'invalid_user',
-                }
+                'You must specify a user to timeout.'
             );
         }
 
@@ -651,25 +685,29 @@ export default {
         // ====================================================
         // RESPONSE
         // ====================================================
-        //
-        // The centralized moderation system sends the
-        // public moderation notification. This response
-        // simply acknowledges the interaction.
-        //
-        // ====================================================
 
         await InteractionHelper.safeEditReply(
             interaction,
             {
+                content: null,
+
                 embeds: [
-                    warningEmbed(
-                        '⏳ Timeout Applied',
-                        `**User:** <@${targetUser.id}>\n` +
-                        `**Duration:** ${durationDisplay}\n` +
-                        `**Reason:** ${reason}\n` +
-                        `**Case ID:** #${result.caseId}`
-                    ),
+                    createTimeoutEmbed({
+                        userId:
+                            targetUser.id,
+
+                        duration:
+                            durationDisplay,
+
+                        reason,
+                    }),
                 ],
+
+                allowedMentions: {
+                    users: [
+                        targetUser.id,
+                    ],
+                },
             }
         );
 
