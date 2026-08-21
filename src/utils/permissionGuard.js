@@ -10,21 +10,54 @@ import { isBotOwner, getBotMessage } from '../config/bot.js';
  * @returns {bigint | null}
  */
 export function getCommandDefaultPermissions(commandData) {
-    const json =
-        commandData?.toJSON?.() ??
-        commandData;
+    if (!commandData) {
+        return null;
+    }
 
-    const value =
-        json?.default_member_permissions;
+    let json = commandData;
 
+    try {
+        if (typeof commandData.toJSON === 'function') {
+            json = commandData.toJSON();
+        }
+    } catch (error) {
+        logger.warn(
+            '[PERMISSION_GUARD] Failed to serialize command permissions',
+            {
+                error: error?.message,
+            }
+        );
+
+        return null;
+    }
+
+    const value = json?.default_member_permissions;
+
+    // null, undefined, empty string, or "0" means no permission gate.
     if (
         value == null ||
-        value === '0'
+        value === '' ||
+        value === '0' ||
+        value === 0
     ) {
         return null;
     }
 
-    return BigInt(value);
+    try {
+        return BigInt(value);
+    } catch (error) {
+        logger.warn(
+            '[PERMISSION_GUARD] Invalid default_member_permissions value',
+            {
+                value,
+                error: error?.message,
+            }
+        );
+
+        // Never break command execution because of malformed
+        // permission metadata.
+        return null;
+    }
 }
 
 // ============================================================
@@ -51,44 +84,31 @@ function normalizeRoleId(role) {
 }
 
 function isModerationCategory(category) {
-    return (
-        category?.toLowerCase?.() ===
-        'moderation'
-    );
+    return String(category || '').trim().toLowerCase() === 'moderation';
 }
 
 // ============================================================
 // MODERATOR ROLE
 // ============================================================
 
-/**
- * Whether a member holds the guild-configured moderator role.
- *
- * @param {import('discord.js').GuildMember | null | undefined} member
- * @param {object | null | undefined} guildConfig
- * @returns {boolean}
- */
 export function memberHasConfiguredModeratorRole(
     member,
     guildConfig
 ) {
-    if (
-        !member ||
-        !guildConfig
-    ) {
+    if (!member || !guildConfig) {
         return false;
     }
 
-    const modRoleId =
-        normalizeRoleId(
-            guildConfig.modRole
-        );
+    const modRoleId = normalizeRoleId(
+        guildConfig.modRole
+    );
+
+    if (!modRoleId) {
+        return false;
+    }
 
     return Boolean(
-        modRoleId &&
-        member.roles.cache.has(
-            modRoleId
-        )
+        member.roles?.cache?.has?.(modRoleId)
     );
 }
 
@@ -96,23 +116,6 @@ export function memberHasConfiguredModeratorRole(
 // MODERATION COMMAND ACCESS
 // ============================================================
 
-/**
- * Whether a member may run a moderation command.
- *
- * Moderation commands can be used by:
- *
- * - The guild owner
- * - Administrators
- * - Users with the command's required Discord permission
- * - Users with the configured moderator role
- *
- * The configured moderator role does NOT require Administrator.
- *
- * @param {import('discord.js').GuildMember | null | undefined} member
- * @param {object | null | undefined} guildConfig
- * @param {bigint | bigint[] | null} [requiredPermissions]
- * @returns {boolean}
- */
 export function memberHasModerationCommandAccess(
     member,
     guildConfig,
@@ -122,28 +125,25 @@ export function memberHasModerationCommandAccess(
         return false;
     }
 
-    // Guild owner can always moderate.
+    // Guild owner always has moderation access.
     if (
-        member.guild?.ownerId ===
-        member.id
+        member.guild?.ownerId &&
+        member.guild.ownerId === member.id
     ) {
         return true;
     }
 
-    // Administrator can always moderate.
+    // Administrator always has moderation access.
     if (
-        member.permissions.has(
+        member.permissions?.has?.(
             PermissionFlagsBits.Administrator
         )
     ) {
         return true;
     }
 
-    // Configured moderator role can always moderate.
-    //
-    // This is checked BEFORE requiredPermissions so that
-    // a moderator role does not need the native Discord
-    // permission such as ModerateMembers.
+    // Configured moderator role bypasses the native
+    // Discord permission requirement.
     if (
         memberHasConfiguredModeratorRole(
             member,
@@ -153,15 +153,13 @@ export function memberHasModerationCommandAccess(
         return true;
     }
 
-    // If the command explicitly requires a Discord
-    // permission, allow users who have that permission.
-    if (
-        requiredPermissions != null &&
-        member.permissions.has(
-            requiredPermissions
-        )
-    ) {
-        return true;
+    // Otherwise honor the command's required permission.
+    if (requiredPermissions != null) {
+        return Boolean(
+            member.permissions?.has?.(
+                requiredPermissions
+            )
+        );
     }
 
     return false;
@@ -171,29 +169,14 @@ export function memberHasModerationCommandAccess(
 // COMMAND DEFAULT PERMISSIONS
 // ============================================================
 
-/**
- * Whether a guild member satisfies a command's
- * default_member_permissions bitfield.
- *
- * Moderation commands additionally accept the configured
- * moderator role.
- *
- * @param {import('discord.js').GuildMember | null | undefined} member
- * @param {bigint | null} permissionBitfield
- * @param {{
- *   guildConfig?: object | null,
- *   commandCategory?: string | null
- * }} [options]
- * @returns {boolean}
- */
 export function memberMeetsCommandPermissions(
     member,
     permissionBitfield,
     options = {}
 ) {
-    if (
-        permissionBitfield == null
-    ) {
+    // IMPORTANT:
+    // A command without default_member_permissions is public.
+    if (permissionBitfield == null) {
         return true;
     }
 
@@ -206,13 +189,9 @@ export function memberMeetsCommandPermissions(
         commandCategory = null,
     } = options;
 
-    // Moderation commands use the bot's moderation access
-    // system rather than requiring the native Discord
-    // permission exclusively.
+    // Moderation commands use the custom moderation system.
     if (
-        isModerationCategory(
-            commandCategory
-        )
+        isModerationCategory(commandCategory)
     ) {
         return memberHasModerationCommandAccess(
             member,
@@ -221,16 +200,19 @@ export function memberMeetsCommandPermissions(
         );
     }
 
-    // Guild owner always passes.
+    // Guild owner bypass.
     if (
-        member.guild?.ownerId ===
-        member.id
+        member.guild?.ownerId &&
+        member.guild.ownerId === member.id
     ) {
         return true;
     }
 
-    return member.permissions.has(
-        permissionBitfield
+    // Normal Discord permission check.
+    return Boolean(
+        member.permissions?.has?.(
+            permissionBitfield
+        )
     );
 }
 
@@ -238,11 +220,6 @@ export function memberMeetsCommandPermissions(
 // CHECK MODERATION PERMISSIONS
 // ============================================================
 
-/**
- * Check moderation command access and reply when denied.
- *
- * @returns {Promise<boolean>}
- */
 export async function checkModerationPermissions(
     interaction,
     guildConfig,
@@ -263,11 +240,9 @@ export async function checkModerationPermissions(
     await replyUserError(
         interaction,
         {
-            type:
-                ErrorTypes.PERMISSION,
+            type: ErrorTypes.PERMISSION,
 
-            message:
-                errorMessage,
+            message: errorMessage,
 
             context: {
                 source:
@@ -279,14 +254,9 @@ export async function checkModerationPermissions(
     logger.warn(
         '[PERMISSION_DENIED] Moderation command blocked',
         {
-            userId:
-                interaction.user?.id,
-
-            guildId:
-                interaction.guildId,
-
-            command:
-                interaction.commandName,
+            userId: interaction.user?.id,
+            guildId: interaction.guildId,
+            command: interaction.commandName,
         }
     );
 
@@ -297,18 +267,6 @@ export async function checkModerationPermissions(
 // DEFAULT COMMAND PERMISSION ENFORCEMENT
 // ============================================================
 
-/**
- * Enforce a command's default_member_permissions for prefix
- * and other non-Discord-gated invocations.
- *
- * Slash commands are normally gated by Discord, but prefix
- * commands must mirror the requirement in code.
- *
- * Moderation commands additionally accept the configured
- * moderator role.
- *
- * @returns {Promise<boolean>}
- */
 export async function enforceDefaultCommandPermissions(
     interaction,
     command,
@@ -328,10 +286,8 @@ export async function enforceDefaultCommandPermissions(
             command?.data
         );
 
-    // Command has no native Discord permission requirement.
-    if (
-        requiredPermissions == null
-    ) {
+    // NO permission requirement = allow the command.
+    if (requiredPermissions == null) {
         return true;
     }
 
@@ -344,12 +300,10 @@ export async function enforceDefaultCommandPermissions(
             requiredPermissions,
             {
                 guildConfig:
-                    context.guildConfig ??
-                    null,
+                    context.guildConfig ?? null,
 
                 commandCategory:
-                    command?.category ??
-                    null,
+                    command?.category ?? null,
             }
         )
     ) {
@@ -364,13 +318,10 @@ export async function enforceDefaultCommandPermissions(
     await replyUserError(
         interaction,
         {
-            type:
-                ErrorTypes.PERMISSION,
+            type: ErrorTypes.PERMISSION,
 
             message:
-                getBotMessage(
-                    'noPermission'
-                ),
+                getBotMessage('noPermission'),
 
             context: {
                 source:
@@ -386,7 +337,7 @@ export async function enforceDefaultCommandPermissions(
     );
 
     logger.warn(
-        '[PERMISSION_DENIED] Prefix command blocked by default_member_permissions',
+        '[PERMISSION_DENIED] Command blocked by default_member_permissions',
         {
             userId:
                 interaction.user?.id,
@@ -414,8 +365,10 @@ export function isAdmin(member) {
         return false;
     }
 
-    return member.permissions.has(
-        PermissionFlagsBits.Administrator
+    return Boolean(
+        member.permissions?.has?.(
+            PermissionFlagsBits.Administrator
+        )
     );
 }
 
@@ -436,10 +389,14 @@ export function isModerator(
         return true;
     }
 
-    return member.permissions.has([
-        PermissionFlagsBits.Administrator,
-        PermissionFlagsBits.ManageGuild,
-    ]);
+    return Boolean(
+        member.permissions?.has?.(
+            PermissionFlagsBits.Administrator
+        ) ||
+        member.permissions?.has?.(
+            PermissionFlagsBits.ManageGuild
+        )
+    );
 }
 
 export function hasPermission(
@@ -450,8 +407,10 @@ export function hasPermission(
         return false;
     }
 
-    return member.permissions.has(
-        permissions
+    return Boolean(
+        member.permissions?.has?.(
+            permissions
+        )
     );
 }
 
@@ -477,9 +436,16 @@ export function botHasPermission(
         return false;
     }
 
-    return channel
-        .permissionsFor(botMember)
-        .has(permissions);
+    const channelPermissions =
+        channel.permissionsFor(botMember);
+
+    if (!channelPermissions) {
+        return false;
+    }
+
+    return channelPermissions.has(
+        permissions
+    );
 }
 
 // ============================================================
@@ -495,19 +461,35 @@ export async function checkUserPermissions(
     const member =
         interaction.member;
 
+    if (!member) {
+        await replyUserError(
+            interaction,
+            {
+                type: ErrorTypes.PERMISSION,
+
+                message: errorMessage,
+
+                context: {
+                    source:
+                        'permissionGuard.checkUserPermissions',
+                },
+            }
+        );
+
+        return false;
+    }
+
     if (
-        !member.permissions.has(
+        !member.permissions?.has?.(
             requiredPermissions
         )
     ) {
         await replyUserError(
             interaction,
             {
-                type:
-                    ErrorTypes.PERMISSION,
+                type: ErrorTypes.PERMISSION,
 
-                message:
-                    errorMessage,
+                message: errorMessage,
 
                 context: {
                     source:
@@ -517,7 +499,17 @@ export async function checkUserPermissions(
         );
 
         logger.warn(
-            `[PERMISSION_DENIED] User ${member.id} attempted command ${interaction.commandName} in guild ${interaction.guildId}`
+            '[PERMISSION_DENIED] User attempted command',
+            {
+                userId:
+                    member.id,
+
+                guildId:
+                    interaction.guildId,
+
+                command:
+                    interaction.commandName,
+            }
         );
 
         return false;
@@ -546,8 +538,7 @@ export async function checkBotPermissions(
         await replyUserError(
             interaction,
             {
-                type:
-                    ErrorTypes.UNKNOWN,
+                type: ErrorTypes.UNKNOWN,
 
                 message:
                     'Could not determine channel.',
@@ -569,8 +560,7 @@ export async function checkBotPermissions(
         await replyUserError(
             interaction,
             {
-                type:
-                    ErrorTypes.UNKNOWN,
+                type: ErrorTypes.UNKNOWN,
 
                 message:
                     'Could not find bot member in this guild.',
@@ -590,6 +580,25 @@ export async function checkBotPermissions(
             botMember
         );
 
+    if (!permissions) {
+        await replyUserError(
+            interaction,
+            {
+                type: ErrorTypes.PERMISSION,
+
+                message:
+                    'Could not determine my permissions in this channel.',
+
+                context: {
+                    source:
+                        'permissionGuard.checkBotPermissions',
+                },
+            }
+        );
+
+        return false;
+    }
+
     const missingPerms = [];
 
     const permArray =
@@ -597,24 +606,17 @@ export async function checkBotPermissions(
             ? requiredPermissions
             : [requiredPermissions];
 
-    for (
-        const perm of permArray
-    ) {
-        if (
-            !permissions.has(perm)
-        ) {
+    for (const perm of permArray) {
+        if (!permissions.has(perm)) {
             missingPerms.push(perm);
         }
     }
 
-    if (
-        missingPerms.length > 0
-    ) {
+    if (missingPerms.length > 0) {
         await replyUserError(
             interaction,
             {
-                type:
-                    ErrorTypes.PERMISSION,
+                type: ErrorTypes.PERMISSION,
 
                 message:
                     `I need the following permissions in ${targetChannel}: ${missingPerms.join(', ')}`,
@@ -630,7 +632,12 @@ export async function checkBotPermissions(
         );
 
         logger.warn(
-            `[BOT_PERMISSION_DENIED] Bot missing permissions [${missingPerms.join(', ')}] in channel ${targetChannel.id}`
+            '[BOT_PERMISSION_DENIED] Bot missing permissions',
+            {
+                permissions: missingPerms,
+                channelId:
+                    targetChannel.id,
+            }
         );
 
         return false;
@@ -644,19 +651,18 @@ export async function checkBotPermissions(
 // ============================================================
 
 function hashUserId(userId) {
+    const value = String(userId || '');
+
     let hash = 0;
 
     for (
         let i = 0;
-        i < userId.length;
+        i < value.length;
         i++
     ) {
-        const char =
-            userId.charCodeAt(i);
-
         hash =
             ((hash << 5) - hash) +
-            char;
+            value.charCodeAt(i);
 
         hash =
             hash & hash;
@@ -684,20 +690,20 @@ export function auditPermissionCheck(
                 userHash,
             }
         );
-    } else {
-        const denyReason =
-            reason ||
-            'insufficient_permissions';
 
-        logger.warn(
-            '[PERMISSION_AUDIT] Permission denied',
-            {
-                action,
-                userHash,
-                reason: denyReason,
-            }
-        );
+        return;
     }
+
+    logger.warn(
+        '[PERMISSION_AUDIT] Permission denied',
+        {
+            action,
+            userHash,
+            reason:
+                reason ||
+                'insufficient_permissions',
+        }
+    );
 }
 
 // ============================================================
