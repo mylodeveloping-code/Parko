@@ -46,23 +46,6 @@ const durationChoices = [
 // ============================================================
 // PREFIX DURATION PARSER
 // ============================================================
-//
-// Supported:
-//
-// 5m
-// 10m
-// 30m
-// 1h
-// 6h
-// 24h
-// 1d
-// 1w
-//
-// Also accepts plain minutes:
-//
-// 10
-//
-// ============================================================
 
 function parsePrefixDuration(value) {
     if (!value) {
@@ -76,8 +59,7 @@ function parsePrefixDuration(value) {
 
     // Plain number = minutes.
     if (/^\d+$/.test(input)) {
-        const minutes =
-            Number(input);
+        const minutes = Number(input);
 
         if (
             !Number.isFinite(minutes) ||
@@ -88,8 +70,7 @@ function parsePrefixDuration(value) {
 
         return {
             minutes,
-            display:
-                formatDurationDisplay(minutes),
+            display: formatDurationDisplay(minutes),
         };
     }
 
@@ -102,11 +83,8 @@ function parsePrefixDuration(value) {
         return null;
     }
 
-    const amount =
-        Number(match[1]);
-
-    const unit =
-        match[2];
+    const amount = Number(match[1]);
+    const unit = match[2];
 
     if (
         !Number.isFinite(amount) ||
@@ -119,23 +97,19 @@ function parsePrefixDuration(value) {
 
     switch (unit) {
         case 'm':
-            minutes =
-                amount;
+            minutes = amount;
             break;
 
         case 'h':
-            minutes =
-                amount * 60;
+            minutes = amount * 60;
             break;
 
         case 'd':
-            minutes =
-                amount * 1440;
+            minutes = amount * 1440;
             break;
 
         case 'w':
-            minutes =
-                amount * 10080;
+            minutes = amount * 10080;
             break;
 
         default:
@@ -149,17 +123,13 @@ function parsePrefixDuration(value) {
         return null;
     }
 
-    if (
-        !Number.isInteger(minutes)
-    ) {
-        minutes =
-            Math.floor(minutes);
+    if (!Number.isInteger(minutes)) {
+        minutes = Math.floor(minutes);
     }
 
     return {
         minutes,
-        display:
-            formatDurationDisplay(minutes),
+        display: formatDurationDisplay(minutes),
     };
 }
 
@@ -169,22 +139,19 @@ function parsePrefixDuration(value) {
 
 function formatDurationDisplay(minutes) {
     if (minutes % 10080 === 0) {
-        const weeks =
-            minutes / 10080;
+        const weeks = minutes / 10080;
 
         return `${weeks} week${weeks === 1 ? '' : 's'}`;
     }
 
     if (minutes % 1440 === 0) {
-        const days =
-            minutes / 1440;
+        const days = minutes / 1440;
 
         return `${days} day${days === 1 ? '' : 's'}`;
     }
 
     if (minutes % 60 === 0) {
-        const hours =
-            minutes / 60;
+        const hours = minutes / 60;
 
         return `${hours} hour${hours === 1 ? '' : 's'}`;
     }
@@ -195,39 +162,60 @@ function formatDurationDisplay(minutes) {
 // ============================================================
 // RESOLVE PREFIX USER
 // ============================================================
+//
+// Supports:
+//
+// >mute 1393674823514980352 10m test
+// >mute @user 10m test
+// >mute <@1393674823514980352> 10m test
+// >mute <@!1393674823514980352> 10m test
+//
+// ============================================================
 
 async function resolvePrefixTarget(
     interaction,
     rawTarget
 ) {
-    if (!rawTarget) {
+    if (!interaction.guild || !rawTarget) {
         return null;
     }
 
     const input =
-        String(rawTarget).trim();
+        String(rawTarget)
+            .trim();
 
+    // Discord mention.
     const mentionMatch =
         input.match(
-            /^<@!?(\d+)>$/
+            /^<@!?(\d{17,20})>$/
+        );
+
+    // Raw Discord ID.
+    const idMatch =
+        input.match(
+            /^(\d{17,20})$/
         );
 
     const userId =
-        mentionMatch
-            ? mentionMatch[1]
-            : /^\d+$/.test(input)
-                ? input
-                : null;
+        mentionMatch?.[1] ||
+        idMatch?.[1];
 
     if (!userId) {
         return null;
     }
 
-    return (
-        interaction.guild.members
-            .fetch(userId)
-            .catch(() => null)
-    );
+    try {
+        return await interaction.guild.members.fetch(
+            userId
+        );
+    } catch (error) {
+        logger.debug(
+            `Unable to fetch timeout target ${userId} in guild ${interaction.guild.id}`,
+            error
+        );
+
+        return null;
+    }
 }
 
 // ============================================================
@@ -240,7 +228,6 @@ export default {
         .setDescription(
             'Timeout a user for a specific duration.'
         )
-
         .addUserOption((option) =>
             option
                 .setName('target')
@@ -249,7 +236,6 @@ export default {
                 )
                 .setRequired(true)
         )
-
         .addIntegerOption((option) =>
             option
                 .setName('duration')
@@ -261,7 +247,6 @@ export default {
                     ...durationChoices
                 )
         )
-
         .addStringOption((option) =>
             option
                 .setName('reason')
@@ -269,7 +254,6 @@ export default {
                     'Reason for the timeout'
                 )
         )
-
         .setDefaultMemberPermissions(
             PermissionFlagsBits.ModerateMembers
         ),
@@ -278,15 +262,6 @@ export default {
 
     // ========================================================
     // PREFIX COMMAND
-    // ========================================================
-    //
-    // This allows:
-    //
-    // >mute USER 10m test
-    // >mute USER 1h test
-    // >mute USER 1d test
-    // >mute USER 10 test
-    //
     // ========================================================
 
     async prefixExecute(
@@ -310,9 +285,9 @@ export default {
                 .trim() ||
             'No reason provided';
 
-        // ================================================
+        // ====================================================
         // TARGET
-        // ================================================
+        // ====================================================
 
         const member =
             await resolvePrefixTarget(
@@ -322,9 +297,13 @@ export default {
 
         if (!member) {
             await interaction.reply({
-                content:
-                    '❌ I could not find that user in this server.\n\n' +
-                    'Usage: `>mute <user ID/@mention> <duration> [reason]`',
+                embeds: [
+                    warningEmbed(
+                        '❌ User Not Found',
+                        'I could not find that user in this server.\n\n' +
+                        '**Usage:** `>mute <user ID/@mention> <duration> [reason]`'
+                    ),
+                ],
             });
 
             return;
@@ -333,9 +312,9 @@ export default {
         const targetUser =
             member.user;
 
-        // ================================================
+        // ====================================================
         // DURATION
-        // ================================================
+        // ====================================================
 
         const parsedDuration =
             parsePrefixDuration(
@@ -344,10 +323,14 @@ export default {
 
         if (!parsedDuration) {
             await interaction.reply({
-                content:
-                    '❌ Invalid timeout duration.\n\n' +
-                    'Examples: `10m`, `1h`, `6h`, `1d`, `1w`\n\n' +
-                    'Usage: `>mute <user ID/@mention> <duration> [reason]`',
+                embeds: [
+                    warningEmbed(
+                        '❌ Invalid Timeout Duration',
+                        'Please provide a valid timeout duration.\n\n' +
+                        '**Examples:** `10m`, `1h`, `6h`, `1d`, `1w`\n\n' +
+                        '**Usage:** `>mute <user ID/@mention> <duration> [reason]`'
+                    ),
+                ],
             });
 
             return;
@@ -361,9 +344,9 @@ export default {
             60 *
             1000;
 
-        // ================================================
+        // ====================================================
         // MODERATION EXEMPTION
-        // ================================================
+        // ====================================================
 
         if (
             isModerationExempt(
@@ -377,9 +360,9 @@ export default {
             );
         }
 
-        // ================================================
+        // ====================================================
         // SELF CHECK
-        // ================================================
+        // ====================================================
 
         if (
             targetUser.id ===
@@ -392,9 +375,9 @@ export default {
             );
         }
 
-        // ================================================
+        // ====================================================
         // BOT CHECK
-        // ================================================
+        // ====================================================
 
         if (
             targetUser.id ===
@@ -407,9 +390,9 @@ export default {
             );
         }
 
-        // ================================================
+        // ====================================================
         // MODERATION HIERARCHY
-        // ================================================
+        // ====================================================
 
         ModerationService.assertModerationHierarchy(
             interaction.member,
@@ -417,9 +400,9 @@ export default {
             'timeout'
         );
 
-        // ================================================
+        // ====================================================
         // PERFORM TIMEOUT
-        // ================================================
+        // ====================================================
 
         const result =
             await ModerationService.timeoutUser({
@@ -436,14 +419,21 @@ export default {
                 reason,
             });
 
-        // ================================================
-        // RESPONSE
-        // ================================================
+        // ====================================================
+        // PUBLIC RESPONSE
+        // ====================================================
+        //
+        // ModerationService handles the centralized
+        // moderation notification. Do not send another
+        // confirmation message here.
+        //
+        // ====================================================
 
         await interaction.reply({
             embeds: [
                 warningEmbed(
-                    `⏳ <@${targetUser.id}> has been timed out | ${targetUser.id}`,
+                    '⏳ Timeout Applied',
+                    `**User:** <@${targetUser.id}>\n` +
                     `**Duration:** ${parsedDuration.display}\n` +
                     `**Reason:** ${reason}\n` +
                     `**Case ID:** #${result.caseId}`
@@ -508,9 +498,9 @@ export default {
             return;
         }
 
-        // ============================================
+        // ====================================================
         // TARGET / DURATION / REASON
-        // ============================================
+        // ====================================================
 
         const targetUser =
             interaction.options.getUser(
@@ -548,9 +538,9 @@ export default {
             );
         }
 
-        // ============================================
+        // ====================================================
         // MODERATION EXEMPTION
-        // ============================================
+        // ====================================================
 
         if (
             isModerationExempt(
@@ -564,9 +554,9 @@ export default {
             );
         }
 
-        // ============================================
+        // ====================================================
         // SELF CHECK
-        // ============================================
+        // ====================================================
 
         if (
             targetUser.id ===
@@ -579,9 +569,9 @@ export default {
             );
         }
 
-        // ============================================
+        // ====================================================
         // BOT CHECK
-        // ============================================
+        // ====================================================
 
         if (
             targetUser.id ===
@@ -594,9 +584,9 @@ export default {
             );
         }
 
-        // ============================================
+        // ====================================================
         // RESOLVE MEMBER
-        // ============================================
+        // ====================================================
 
         const member =
             await resolveModerationTarget(
@@ -612,9 +602,9 @@ export default {
             );
         }
 
-        // ============================================
+        // ====================================================
         // MODERATION HIERARCHY
-        // ============================================
+        // ====================================================
 
         ModerationService.assertModerationHierarchy(
             interaction.member,
@@ -622,18 +612,18 @@ export default {
             'timeout'
         );
 
-        // ============================================
+        // ====================================================
         // CONVERT DURATION
-        // ============================================
+        // ====================================================
 
         const durationMs =
             durationMinutes *
             60 *
             1000;
 
-        // ============================================
+        // ====================================================
         // PERFORM TIMEOUT
-        // ============================================
+        // ====================================================
 
         const result =
             await ModerationService.timeoutUser({
@@ -658,17 +648,23 @@ export default {
             )?.name ||
             `${durationMinutes} minutes`;
 
-        // ============================================
+        // ====================================================
         // RESPONSE
-        // ============================================
+        // ====================================================
+        //
+        // The centralized moderation system sends the
+        // public moderation notification. This response
+        // simply acknowledges the interaction.
+        //
+        // ====================================================
 
         await InteractionHelper.safeEditReply(
             interaction,
             {
-                content: '',
                 embeds: [
                     warningEmbed(
-                        `⏳ <@${targetUser.id}> has been timed out | ${targetUser.id}`,
+                        '⏳ Timeout Applied',
+                        `**User:** <@${targetUser.id}>\n` +
                         `**Duration:** ${durationDisplay}\n` +
                         `**Reason:** ${reason}\n` +
                         `**Case ID:** #${result.caseId}`
