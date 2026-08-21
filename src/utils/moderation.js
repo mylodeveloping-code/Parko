@@ -1,5 +1,3 @@
-// moderation.js
-
 import {
   EmbedBuilder,
 } from 'discord.js';
@@ -44,14 +42,7 @@ export function isModerationExempt(userId) {
 /**
  * Resolve a user ID into a GuildMember.
  *
- * IMPORTANT:
- * Do NOT rely only on guild.members.cache.get().
- *
- * A member can be in the server without currently being
- * present in the bot's local member cache.
- *
- * This function first checks the cache and then asks Discord
- * for the member if necessary.
+ * First checks cache, then fetches directly from Discord.
  *
  * @param {import('discord.js').Guild} guild
  * @param {string} userId
@@ -72,7 +63,6 @@ export async function resolveModerationTarget(
     return null;
   }
 
-  // Check cache first.
   const cachedMember =
     guild.members.cache.get(id);
 
@@ -80,7 +70,6 @@ export async function resolveModerationTarget(
     return cachedMember;
   }
 
-  // Fetch directly from Discord.
   try {
     const member =
       await guild.members.fetch(id);
@@ -96,17 +85,15 @@ export async function resolveModerationTarget(
   }
 }
 
+// ============================================================
+// MODERATION USER RESOLUTION
+// ============================================================
+
 /**
  * Resolve a Discord user by ID.
  *
- * This does NOT require the user to currently be in the server.
- *
- * Useful for:
- * - Warn
- * - View warnings
- * - Ban
- * - Unban
- * - Case lookup
+ * Unlike resolveModerationTarget(), this does not require
+ * the user to currently be in the guild.
  *
  * @param {import('discord.js').Client} client
  * @param {string} userId
@@ -139,13 +126,12 @@ export async function resolveModerationUser(
   }
 }
 
+// ============================================================
+// MODERATION TARGET DATA
+// ============================================================
+
 /**
- * Resolve a moderation target.
- *
- * Returns both the User and GuildMember when possible.
- *
- * The important distinction is that the User can exist even
- * when the person is not currently in the guild.
+ * Resolve both User and GuildMember when possible.
  *
  * @param {import('discord.js').Client} client
  * @param {import('discord.js').Guild} guild
@@ -539,6 +525,99 @@ const MODERATION_NOTIFICATION_TEXT = {
 };
 
 // ============================================================
+// RESOLVE MODERATION NOTIFICATION CHANNEL
+// ============================================================
+
+/**
+ * Resolve the channel where a moderation notification should
+ * be sent.
+ *
+ * Priority:
+ *
+ * 1. event.channel
+ * 2. event.metadata.channelId
+ * 3. event.channelId
+ * 4. guild.systemChannel
+ *
+ * This allows commands to explicitly tell the moderation
+ * system which channel they originated from.
+ *
+ * The system channel remains as a safe fallback for
+ * moderation actions that do not provide an originating
+ * channel.
+ */
+async function resolveModerationNotificationChannel({
+  guild,
+  event,
+}) {
+  if (!guild || !event) {
+    return null;
+  }
+
+  // ==========================================================
+  // DIRECT CHANNEL OBJECT
+  // ==========================================================
+
+  if (
+    event.channel &&
+    typeof event.channel.send === 'function'
+  ) {
+    return event.channel;
+  }
+
+  // ==========================================================
+  // CHANNEL ID
+  // ==========================================================
+
+  const channelId =
+    event.metadata?.channelId ||
+    event.channelId ||
+    null;
+
+  if (channelId) {
+    try {
+      const channel =
+        guild.channels.cache.get(
+          String(channelId)
+        ) ||
+        await guild.channels.fetch(
+          String(channelId)
+        ).catch(() => null);
+
+      if (
+        channel &&
+        channel.isTextBased?.() &&
+        typeof channel.send === 'function'
+      ) {
+        return channel;
+      }
+    } catch (error) {
+      logger.debug(
+        `Unable to resolve moderation notification channel ${channelId}:`,
+        error
+      );
+    }
+  }
+
+  // ==========================================================
+  // SYSTEM CHANNEL FALLBACK
+  // ==========================================================
+
+  const systemChannel =
+    guild.systemChannel;
+
+  if (
+    systemChannel &&
+    systemChannel.isTextBased?.() &&
+    typeof systemChannel.send === 'function'
+  ) {
+    return systemChannel;
+  }
+
+  return null;
+}
+
+// ============================================================
 // SEND MODERATION NOTIFICATION
 // ============================================================
 
@@ -580,23 +659,15 @@ export async function sendModerationNotification({
     }
 
     const channel =
-      guild.systemChannel;
+      await resolveModerationNotificationChannel({
+        guild,
+        event,
+      });
 
     if (!channel) {
       logger.warn(
         `Cannot send moderation notification in ${guild.name}: ` +
-        `no system channel is configured.`
-      );
-
-      return false;
-    }
-
-    if (
-      !channel.isTextBased?.()
-    ) {
-      logger.warn(
-        `Cannot send moderation notification in ${guild.name}: ` +
-        `system channel is not text-based.`
+        `no usable notification channel was found.`
       );
 
       return false;
@@ -639,7 +710,8 @@ export async function sendModerationNotification({
 
     logger.info(
       `Moderation notification sent: ` +
-      `${event.action} for ${userId} in ${guild.name}`
+      `${event.action} for ${userId} in ${guild.name} ` +
+      `(channel ${channel.id})`
     );
 
     return true;
@@ -1101,7 +1173,10 @@ export async function logModerationAction({
       ? String(targetUserId)
       : null;
 
-  // Never create a moderation case for exempt users.
+  // ==========================================================
+  // EXEMPTION
+  // ==========================================================
+
   if (
     normalizedTargetUserId &&
     isModerationExempt(
@@ -1125,6 +1200,38 @@ export async function logModerationAction({
       client,
       guild.id
     );
+
+  // ==========================================================
+  // NORMALIZED EVENT
+  // ==========================================================
+
+  const normalizedEvent = {
+    ...event,
+
+    metadata: {
+      ...(event.metadata || {}),
+
+      ...(normalizedTargetUserId
+        ? {
+            userId:
+              normalizedTargetUserId,
+          }
+        : {}),
+
+      // Preserve the originating channel when supplied.
+      ...(event.channel?.id
+        ? {
+            channelId:
+              String(event.channel.id),
+          }
+        : {}),
+    },
+
+    targetUserId:
+      normalizedTargetUserId,
+
+    caseId,
+  };
 
   // ==========================================================
   // STORE CASE
@@ -1153,7 +1260,7 @@ export async function logModerationAction({
         event.duration,
 
       metadata:
-        event.metadata,
+        normalizedEvent.metadata,
 
       targetUserId:
         normalizedTargetUserId,
@@ -1164,6 +1271,13 @@ export async function logModerationAction({
               event.metadata.moderatorId
             )
           : undefined,
+
+      channelId:
+        event.channel?.id
+          ? String(event.channel.id)
+          : event.metadata?.channelId
+            ? String(event.metadata.channelId)
+            : undefined,
     },
   });
 
@@ -1175,22 +1289,8 @@ export async function logModerationAction({
     client,
     guild,
 
-    event: {
-      ...event,
-
-      metadata: {
-        ...(event.metadata || {}),
-
-        ...(normalizedTargetUserId
-          ? {
-              userId:
-                normalizedTargetUserId,
-            }
-          : {}),
-      },
-
-      caseId,
-    },
+    event:
+      normalizedEvent,
   });
 
   // ==========================================================
@@ -1200,25 +1300,8 @@ export async function logModerationAction({
   await sendModerationNotification({
     guild,
 
-    event: {
-      ...event,
-
-      metadata: {
-        ...(event.metadata || {}),
-
-        ...(normalizedTargetUserId
-          ? {
-              userId:
-                normalizedTargetUserId,
-            }
-          : {}),
-      },
-
-      targetUserId:
-        normalizedTargetUserId,
-
-      caseId,
-    },
+    event:
+      normalizedEvent,
   });
 
   return caseId;

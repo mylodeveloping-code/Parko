@@ -1,5 +1,3 @@
-// responseCoordinator.js — single respond-once gate for prefix and slash commands
-
 import { buildUserErrorEmbed } from './embeds.js';
 import { logger } from './logger.js';
 
@@ -15,64 +13,108 @@ function getCommandJson(commandData) {
         : commandData;
 }
 
-export function buildPrefixUsage(prefix, commandData, validation) {
-    const commandJson = getCommandJson(commandData);
-    const usageParts = [`${prefix}${commandJson.name}`];
+export function buildPrefixUsage(
+    prefix,
+    commandData,
+    validation,
+) {
+    const commandJson =
+        getCommandJson(commandData);
 
-    // Use a custom usage string if the command provides one.
-    //
-    // Example:
-    // usage: "[all, target]"
-    //
-    // Result:
-    // .role [all, target]
+    const usageParts = [
+        `${prefix}${commandJson.name}`,
+    ];
+
     if (commandData?.usage) {
-        usageParts.push(commandData.usage);
-        return usageParts.filter(Boolean).join(' ');
+        usageParts.push(
+            commandData.usage,
+        );
+
+        return usageParts
+            .filter(Boolean)
+            .join(' ');
     }
 
-    if (validation.subcommandGroupName) {
-        usageParts.push(validation.subcommandGroupName);
+    if (
+        validation.subcommandGroupName
+    ) {
+        usageParts.push(
+            validation.subcommandGroupName,
+        );
     }
 
-    if (validation.subcommandName) {
-        usageParts.push(validation.subcommandName);
+    if (
+        validation.subcommandName
+    ) {
+        usageParts.push(
+            validation.subcommandName,
+        );
     } else if (
         !validation.subcommandGroupName &&
-        commandJson.options?.some((opt) => opt.type === 1)
+        commandJson.options?.some(
+            opt => opt.type === 1,
+        )
     ) {
-        usageParts.push('[subcommand]');
+        usageParts.push(
+            '[subcommand]',
+        );
     }
 
-    const optionDefs = validation.optionDefs || [];
+    const optionDefs =
+        validation.optionDefs || [];
 
     for (const option of optionDefs) {
-        usageParts.push(`[${option.name}]`);
+        usageParts.push(
+            `[${option.name}]`,
+        );
     }
 
-    return usageParts.filter(Boolean).join(' ');
+    return usageParts
+        .filter(Boolean)
+        .join(' ');
 }
 
 export class ResponseCoordinator {
-    constructor(interaction, { message = null } = {}) {
-        this.interaction = interaction;
-        this.message = message;
-        this._replyMessage = null;
-        this._finalized = false;
-        this._finalizedReason = null;
+    constructor(
+        interaction,
+        {
+            message = null,
+        } = {},
+    ) {
+        this.interaction =
+            interaction;
+
+        this.message =
+            message;
+
+        this._replyMessage =
+            null;
+
+        this._finalized =
+            false;
+
+        this._finalizedReason =
+            null;
     }
 
-    static attach(interaction, options = {}) {
-        if (interaction._responseCoordinator) {
+    static attach(
+        interaction,
+        options = {},
+    ) {
+        if (
+            interaction._responseCoordinator
+        ) {
             return interaction._responseCoordinator;
         }
 
-        const coordinator = new ResponseCoordinator(
-            interaction,
-            options,
-        );
+        const coordinator =
+            new ResponseCoordinator(
+                interaction,
+                options,
+            );
 
-        interaction._responseCoordinator = coordinator;
+        interaction._responseCoordinator =
+            coordinator;
 
         return coordinator;
     }
@@ -88,13 +130,21 @@ export class ResponseCoordinator {
     }
 
     isUsageFinalized() {
-        return this._finalizedReason === 'usage';
+        return (
+            this._finalizedReason ===
+            'usage'
+        );
     }
 
     markFinalized(reason) {
-        this._finalized = true;
-        this._finalizedReason = reason;
-        this.interaction.replied = true;
+        this._finalized =
+            true;
+
+        this._finalizedReason =
+            reason;
+
+        this.interaction.replied =
+            true;
     }
 
     getReplyMessage() {
@@ -105,9 +155,14 @@ export class ResponseCoordinator {
         );
     }
 
-    setReplyMessage(sentMessage) {
-        this._replyMessage = sentMessage;
-        this.interaction._replyMessage = sentMessage;
+    setReplyMessage(
+        sentMessage,
+    ) {
+        this._replyMessage =
+            sentMessage;
+
+        this.interaction._replyMessage =
+            sentMessage;
     }
 
     isPrefixInteraction() {
@@ -117,141 +172,169 @@ export class ResponseCoordinator {
         );
     }
 
-    async sendPrefixPayload(payload) {
-        if (!this.message?.channel) {
+    async sendPrefixPayload(
+        payload,
+    ) {
+        if (
+            !this.message?.channel
+        ) {
             return null;
         }
 
         const sentMessage =
-            await this.message.channel.send(payload);
+            await this.message.channel.send(
+                payload,
+            );
 
-        this.setReplyMessage(sentMessage);
+        this.setReplyMessage(
+            sentMessage,
+        );
 
         return sentMessage;
     }
 
     async deferLocal() {
-        this.interaction.deferred = true;
+        this.interaction.deferred =
+            true;
+
         return true;
     }
 
     async respond(payload) {
-        if (this.isUsageFinalized()) {
+        if (
+            this.isUsageFinalized()
+        ) {
             return this.getReplyMessage();
         }
 
-        const existing = this.getReplyMessage();
+        const existing =
+            this.getReplyMessage();
 
         if (existing) {
             return this.edit(payload);
         }
 
-        this.interaction.replied = true;
+        // Prefix commands always respond in
+        // the originating message channel.
+        if (
+            this.isPrefixInteraction()
+        ) {
+            this.interaction.replied =
+                true;
 
-        if (this.message?.channel) {
-            const sentMessage =
-                await this.message.channel.send(payload);
-
-            this.setReplyMessage(sentMessage);
-
-            return sentMessage;
+            return this.sendPrefixPayload(
+                payload,
+            );
         }
 
-        if (this.interaction.deferred) {
-            if (this.isPrefixInteraction()) {
-                return this.sendPrefixPayload(payload);
-            }
-
-            await this.interaction.editReply(payload);
+        if (
+            this.interaction.deferred
+        ) {
+            await this.interaction.editReply(
+                payload,
+            );
 
             return null;
         }
 
-        if (this.interaction.replied) {
-            if (this.message?.channel) {
-                return this.message.channel.send(payload);
-            }
-
-            await this.interaction.followUp(payload);
-
-            return null;
-        }
-
-        if (this.isPrefixInteraction()) {
-            return this.sendPrefixPayload(payload);
-        }
-
-        await this.interaction.reply(payload);
+        await this.interaction.reply(
+            payload,
+        );
 
         return null;
     }
 
     async edit(payload) {
-        if (this.isUsageFinalized()) {
+        if (
+            this.isUsageFinalized()
+        ) {
             return this.getReplyMessage();
         }
 
-        const existing = this.getReplyMessage();
+        const existing =
+            this.getReplyMessage();
 
         if (existing) {
             try {
-                return await existing.edit(payload);
+                return await existing.edit(
+                    payload,
+                );
             } catch (error) {
                 logger.debug(
                     `ResponseCoordinator edit failed: ${error.message}`,
                 );
 
-                if (this.message?.channel) {
-                    const sentMessage =
-                        await this.message.channel.send(payload);
-
-                    this.setReplyMessage(sentMessage);
-
-                    return sentMessage;
+                if (
+                    this.isPrefixInteraction()
+                ) {
+                    return this.sendPrefixPayload(
+                        payload,
+                    );
                 }
 
                 throw error;
             }
         }
 
-        if (this.isPrefixInteraction()) {
-            return this.sendPrefixPayload(payload);
+        if (
+            this.isPrefixInteraction()
+        ) {
+            return this.sendPrefixPayload(
+                payload,
+            );
         }
 
         if (
             this.interaction.deferred ||
             this.interaction.replied
         ) {
-            await this.interaction.editReply(payload);
+            await this.interaction.editReply(
+                payload,
+            );
 
             return null;
         }
 
-        return this.respond(payload);
+        return this.respond(
+            payload,
+        );
     }
 
     async followUp(payload) {
-        if (this.message?.channel) {
-            return this.message.channel.send(payload);
+        if (
+            this.isPrefixInteraction()
+        ) {
+            return this.message.channel.send(
+                payload,
+            );
         }
 
-        return this.interaction.followUp(payload);
+        return this.interaction.followUp(
+            payload,
+        );
     }
 
-    async respondUsage(usageLine) {
-        const embed = buildUserErrorEmbed(
-            'validation',
-            `Usage\n\`${usageLine}\``,
-            {
-                titleOverride: 'Wrong Usage',
-            },
+    async respondUsage(
+        usageLine,
+    ) {
+        const embed =
+            buildUserErrorEmbed(
+                'validation',
+                `Usage\n\`${usageLine}\``,
+                {
+                    titleOverride:
+                        'Wrong Usage',
+                },
+            );
+
+        const result =
+            await this.respond({
+                embeds: [embed],
+            });
+
+        this.markFinalized(
+            'usage',
         );
-
-        const result = await this.respond({
-            embeds: [embed],
-        });
-
-        this.markFinalized('usage');
 
         return result;
     }
@@ -261,12 +344,15 @@ export class ResponseCoordinator {
         commandData,
         validation,
     ) {
-        const usageLine = buildPrefixUsage(
-            prefix,
-            commandData,
-            validation,
-        );
+        const usageLine =
+            buildPrefixUsage(
+                prefix,
+                commandData,
+                validation,
+            );
 
-        return this.respondUsage(usageLine);
+        return this.respondUsage(
+            usageLine,
+        );
     }
 }

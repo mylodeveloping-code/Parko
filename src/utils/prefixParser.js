@@ -1,5 +1,3 @@
-// prefixParser.js
-
 import { resolveSubcommandAlias } from '../config/commands/commandAliases.js';
 import { logger } from './logger.js';
 
@@ -25,17 +23,15 @@ export function parsePrefixCommand(content, prefix) {
     const commandName =
         args[0].toLowerCase();
 
-    const commandArgs =
-        args.slice(1);
-
     return {
         commandName,
-        args: commandArgs,
+        args: args.slice(1),
     };
 }
 
 function parseArguments(input) {
     const args = [];
+
     let current = '';
     let inQuote = false;
     let quoteChar = '';
@@ -59,20 +55,30 @@ function parseArguments(input) {
             continue;
         }
 
-        if (char === '"' || char === "'") {
+        if (
+            char === '"' ||
+            char === "'"
+        ) {
             if (current.trim()) {
-                args.push(current.trim());
+                args.push(
+                    current.trim(),
+                );
+
                 current = '';
             }
 
             inQuote = true;
             quoteChar = char;
+
             continue;
         }
 
         if (/\s/.test(char)) {
             if (current.trim()) {
-                args.push(current.trim());
+                args.push(
+                    current.trim(),
+                );
+
                 current = '';
             }
 
@@ -83,17 +89,22 @@ function parseArguments(input) {
     }
 
     if (current.trim()) {
-        args.push(current.trim());
+        args.push(
+            current.trim(),
+        );
     }
 
     return args;
 }
 
-/**
- * Converts prefix command arguments into something that
- * behaves similarly to Discord's interaction.options.
- */
-export function mapArgumentsToOptions(args, commandData) {
+// ============================================================
+// MAP PREFIX ARGUMENTS TO OPTIONS
+// ============================================================
+
+export function mapArgumentsToOptions(
+    args,
+    commandData,
+) {
     const options = {};
 
     let subcommandName = null;
@@ -104,24 +115,28 @@ export function mapArgumentsToOptions(args, commandData) {
             ? commandData.toJSON()
             : commandData;
 
-    if (!cmdData || !cmdData.options) {
+    if (
+        !cmdData ||
+        !cmdData.options
+    ) {
         return createOptionsObject(
             options,
             args,
             null,
             null,
-            []
+            [],
+            [],
         );
     }
 
     const subcommandGroup =
         cmdData.options.find(
-            opt => opt.type === 2
+            opt => opt.type === 2,
         );
 
     const subcommands =
         cmdData.options.filter(
-            opt => opt.type === 1
+            opt => opt.type === 1,
         );
 
     const hasSubcommands =
@@ -132,7 +147,7 @@ export function mapArgumentsToOptions(args, commandData) {
     let optionDefs = [];
 
     logger.debug(
-        `Parsing prefix command: commandName=${cmdData.name}, args=${JSON.stringify(args)}, hasSubcommands=${hasSubcommands}, hasSubcommandGroup=${!!subcommandGroup}, optionsCount=${cmdData.options.length}`
+        `Parsing prefix command: commandName=${cmdData.name}, commandArgs=${JSON.stringify(args)}`,
     );
 
     // =========================================================
@@ -148,20 +163,23 @@ export function mapArgumentsToOptions(args, commandData) {
                 subcommandGroup.options?.find(
                     g =>
                         g.name.toLowerCase() ===
-                        subcommandGroupName
+                        subcommandGroupName,
                 );
 
-            if (group && args.length > 1) {
+            if (
+                group &&
+                args.length > 1
+            ) {
                 subcommandName =
                     resolveSubcommandAlias(
-                        args[1]
+                        args[1],
                     );
 
                 const sub =
                     group.options?.find(
                         s =>
                             s.name.toLowerCase() ===
-                            subcommandName.toLowerCase()
+                            subcommandName.toLowerCase(),
                     );
 
                 if (sub) {
@@ -169,7 +187,7 @@ export function mapArgumentsToOptions(args, commandData) {
                         sub.options?.filter(
                             opt =>
                                 opt.type !== 1 &&
-                                opt.type !== 2
+                                opt.type !== 2,
                         ) || [];
 
                     currentArgs =
@@ -187,18 +205,14 @@ export function mapArgumentsToOptions(args, commandData) {
         if (args.length > 0) {
             const resolvedSubcommand =
                 resolveSubcommandAlias(
-                    args[0]
+                    args[0],
                 );
-
-            logger.debug(
-                `Looking for subcommand: ${resolvedSubcommand}, available: ${subcommands.map(s => s.name).join(', ')}`
-            );
 
             const sub =
                 subcommands.find(
                     s =>
                         s.name.toLowerCase() ===
-                        resolvedSubcommand.toLowerCase()
+                        resolvedSubcommand.toLowerCase(),
                 );
 
             if (sub) {
@@ -209,14 +223,14 @@ export function mapArgumentsToOptions(args, commandData) {
                     sub.options?.filter(
                         opt =>
                             opt.type !== 1 &&
-                            opt.type !== 2
+                            opt.type !== 2,
                     ) || [];
 
                 currentArgs =
                     args.slice(1);
 
                 logger.debug(
-                    `Found subcommand ${subcommandName}, optionDefs: ${optionDefs.length}`
+                    `Found subcommand ${subcommandName}, optionDefs: ${optionDefs.length}`,
                 );
             }
         }
@@ -231,7 +245,7 @@ export function mapArgumentsToOptions(args, commandData) {
             cmdData.options.filter(
                 opt =>
                     opt.type !== 1 &&
-                    opt.type !== 2
+                    opt.type !== 2,
             );
     }
 
@@ -241,20 +255,18 @@ export function mapArgumentsToOptions(args, commandData) {
 
     for (
         let i = 0;
-        i < Math.min(
+        i <
+        Math.min(
             currentArgs.length,
-            optionDefs.length
+            optionDefs.length,
         );
         i++
     ) {
         const optionDef =
             optionDefs[i];
 
-        const value =
-            currentArgs[i];
-
         options[optionDef.name] =
-            value;
+            currentArgs[i];
     }
 
     // =========================================================
@@ -265,8 +277,10 @@ export function mapArgumentsToOptions(args, commandData) {
 
     if (
         subcommandName ||
-        (!hasSubcommands &&
-            !subcommandGroup)
+        (
+            !hasSubcommands &&
+            !subcommandGroup
+        )
     ) {
         for (const opt of optionDefs) {
             if (
@@ -274,10 +288,14 @@ export function mapArgumentsToOptions(args, commandData) {
                 !options[opt.name]
             ) {
                 missing.push({
-                    name: opt.name,
+                    name:
+                        opt.name,
+
                     description:
                         opt.description,
-                    type: opt.type,
+
+                    type:
+                        opt.type,
                 });
             }
         }
@@ -288,8 +306,10 @@ export function mapArgumentsToOptions(args, commandData) {
     // =========================================================
 
     if (
-        (hasSubcommands ||
-            subcommandGroup) &&
+        (
+            hasSubcommands ||
+            subcommandGroup
+        ) &&
         !subcommandName &&
         !subcommandGroupName
     ) {
@@ -297,10 +317,12 @@ export function mapArgumentsToOptions(args, commandData) {
             hasSubcommands
                 ? subcommands
                     .map(s => s.name)
-                    .join(', ') || 'none'
+                    .join(', ') ||
+                  'none'
                 : subcommandGroup?.options
                     ?.map(g => g.name)
-                    .join(', ') || 'none';
+                    .join(', ') ||
+                  'none';
 
         missing.push({
             name:
@@ -325,7 +347,8 @@ export function mapArgumentsToOptions(args, commandData) {
         !subcommandName
     ) {
         missing.push({
-            name: 'subcommand',
+            name:
+                'subcommand',
 
             description:
                 `Available: ${subcommands
@@ -349,7 +372,7 @@ export function mapArgumentsToOptions(args, commandData) {
             subcommandGroup.options?.find(
                 g =>
                     g.name.toLowerCase() ===
-                    subcommandGroupName.toLowerCase()
+                    subcommandGroupName.toLowerCase(),
             );
 
         const available =
@@ -359,7 +382,8 @@ export function mapArgumentsToOptions(args, commandData) {
             'none';
 
         missing.push({
-            name: 'subcommand',
+            name:
+                'subcommand',
 
             description:
                 `Available: ${available}`,
@@ -374,20 +398,21 @@ export function mapArgumentsToOptions(args, commandData) {
         subcommandName,
         subcommandGroupName,
         missing,
-        optionDefs
+        optionDefs,
     );
 }
 
-/**
- * Creates the interaction-style options object.
- */
+// ============================================================
+// INTERACTION-STYLE OPTIONS
+// ============================================================
+
 function createOptionsObject(
     options,
     args,
     subcommandName,
     subcommandGroupName,
     missing = [],
-    optionDefs = []
+    optionDefs = [],
 ) {
     const getValue = name =>
         options[name] ?? null;
@@ -395,81 +420,85 @@ function createOptionsObject(
     return {
         ...options,
 
-        _positional: args,
+        _positional:
+            args,
 
-        get: name =>
-            getValue(name),
+        get:
+            name =>
+                getValue(name),
 
-        getString: name =>
-            getValue(name),
+        getString:
+            name =>
+                getValue(name),
 
-        /*
-         * IMPORTANT:
-         *
-         * Prefix commands don't have real Discord
-         * interaction User objects yet.
-         *
-         * Return the raw mention/ID here.
-         *
-         * messageAdapter.js converts this into
-         * an actual Discord User.
-         */
-        getUser: name =>
-            getValue(name),
+        // Raw value. messageAdapter resolves type-6
+        // options into actual Discord User objects.
+        getUser:
+            name =>
+                getValue(name),
 
-        getMember: name =>
-            getValue(name),
+        getMember:
+            name =>
+                getValue(name),
 
-        getChannel: name =>
-            getValue(name),
+        getChannel:
+            name =>
+                getValue(name),
 
-        getRole: name =>
-            getValue(name),
+        getRole:
+            name =>
+                getValue(name),
 
-        getInteger: name => {
-            const value =
-                getValue(name);
+        getInteger:
+            name => {
+                const value =
+                    getValue(name);
 
-            if (
-                value === null ||
-                value === undefined
-            ) {
-                return null;
-            }
+                if (
+                    value === null ||
+                    value === undefined
+                ) {
+                    return null;
+                }
 
-            const parsed =
-                Number.parseInt(
-                    value,
-                    10
-                );
+                const parsed =
+                    Number.parseInt(
+                        value,
+                        10,
+                    );
 
-            return Number.isNaN(parsed)
-                ? null
-                : parsed;
-        },
+                return Number.isNaN(parsed)
+                    ? null
+                    : parsed;
+            },
 
-        getBoolean: name =>
-            String(
-                getValue(name)
-            ).toLowerCase() === 'true',
+        getBoolean:
+            name =>
+                String(
+                    getValue(name),
+                ).toLowerCase() ===
+                'true',
 
-        getSubcommand: () =>
-            subcommandName,
+        getSubcommand:
+            () =>
+                subcommandName,
 
-        getSubcommandGroup: () =>
-            subcommandGroupName,
+        getSubcommandGroup:
+            () =>
+                subcommandGroupName,
 
-        validateRequired: () => ({
-            valid:
-                missing.length === 0,
+        validateRequired:
+            () => ({
+                valid:
+                    missing.length === 0,
 
-            missing,
+                missing,
 
-            subcommandName,
+                subcommandName,
 
-            subcommandGroupName,
+                subcommandGroupName,
 
-            optionDefs,
-        }),
+                optionDefs,
+            }),
     };
 }

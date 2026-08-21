@@ -113,9 +113,13 @@ function resolveUserId(value) {
         return null;
     }
 
-    const stringValue = String(value).trim();
+    const stringValue =
+        String(value).trim();
 
-    let match = stringValue.match(/^<@!?(\d+)>$/);
+    const match =
+        stringValue.match(
+            /^<@!?(\d+)>$/,
+        );
 
     if (match) {
         return match[1];
@@ -129,49 +133,82 @@ function resolveUserId(value) {
 }
 
 // ============================================================
-// PREFIX OPTION VALUE
+// RESOLVE PREFIX USER
+// ============================================================
 //
-// Discord prefix arguments can arrive as:
+// Prefix commands can provide:
+//
 //   @User
 //   <@UserID>
 //   <@!UserID>
 //   UserID
 //
-// Always resolve the actual Discord user/member before
-// returning from getUser/getMember.
-// ============================================================
+// We first check cache, then fetch from Discord.
+//
+// This is intentionally async because a valid Discord user
+// may not exist in either local cache.
+//
 
-function resolvePrefixUser(message, rawValue) {
-    const userId = resolveUserId(rawValue);
+async function resolvePrefixUser(
+    message,
+    rawValue,
+) {
+    const userId =
+        resolveUserId(rawValue);
 
     if (!userId) {
         return null;
     }
 
-    // First try the guild member cache.
+    // --------------------------------------------------------
+    // Guild member cache
+    // --------------------------------------------------------
+
     const cachedMember =
-        message.guild?.members?.cache?.get(userId);
+        message.guild?.members?.cache?.get(
+            userId,
+        );
 
     if (cachedMember?.user) {
         return cachedMember.user;
     }
 
-    // Then try the client user cache.
+    // --------------------------------------------------------
+    // User cache
+    // --------------------------------------------------------
+
     const cachedUser =
-        message.client?.users?.cache?.get(userId);
+        message.client?.users?.cache?.get(
+            userId,
+        );
 
     if (cachedUser) {
         return cachedUser;
     }
 
-    return null;
+    // --------------------------------------------------------
+    // Discord API fallback
+    // --------------------------------------------------------
+
+    try {
+        return await message.client.users.fetch(
+            userId,
+        );
+    } catch (error) {
+        logger.debug(
+            `Unable to resolve prefix user ${userId}:`,
+            error,
+        );
+
+        return null;
+    }
 }
 
 // ============================================================
 // CREATE MOCK INTERACTION
 // ============================================================
 
-export function createMockInteraction(
+export async function createMockInteraction(
     message,
     commandData,
     args,
@@ -185,10 +222,116 @@ export function createMockInteraction(
             commandData,
         );
 
-    const commandStartTime = Date.now();
+    // --------------------------------------------------------
+    // Resolve user options BEFORE command execution.
+    //
+    // This makes interaction.options.getUser() behave like
+    // a real Discord interaction.
+    // --------------------------------------------------------
+
+    const resolvedUsers = new Map();
+
+    const commandOptions =
+        commandJson?.options || [];
+
+    for (const optionDef of commandOptions) {
+        if (optionDef.type !== 6) {
+            continue;
+        }
+
+        const rawValue =
+            options.getUser(optionDef.name);
+
+        if (!rawValue) {
+            continue;
+        }
+
+        const user =
+            await resolvePrefixUser(
+                message,
+                rawValue,
+            );
+
+        if (user) {
+            resolvedUsers.set(
+                optionDef.name,
+                user,
+            );
+        }
+    }
+
+    // --------------------------------------------------------
+    // Also resolve user options inside subcommands.
+    // --------------------------------------------------------
+
+    for (const optionDef of commandOptions) {
+        if (optionDef.type === 1) {
+            for (const subOption of optionDef.options || []) {
+                if (subOption.type !== 6) {
+                    continue;
+                }
+
+                const rawValue =
+                    options.getUser(
+                        subOption.name,
+                    );
+
+                if (!rawValue) {
+                    continue;
+                }
+
+                const user =
+                    await resolvePrefixUser(
+                        message,
+                        rawValue,
+                    );
+
+                if (user) {
+                    resolvedUsers.set(
+                        subOption.name,
+                        user,
+                    );
+                }
+            }
+        }
+
+        if (optionDef.type === 2) {
+            for (const group of optionDef.options || []) {
+                for (const subOption of group.options || []) {
+                    if (subOption.type !== 6) {
+                        continue;
+                    }
+
+                    const rawValue =
+                        options.getUser(
+                            subOption.name,
+                        );
+
+                    if (!rawValue) {
+                        continue;
+                    }
+
+                    const user =
+                        await resolvePrefixUser(
+                            message,
+                            rawValue,
+                        );
+
+                    if (user) {
+                        resolvedUsers.set(
+                            subOption.name,
+                            user,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    const commandStartTime =
+        Date.now();
 
     let replyMessage = null;
-    let isDeferred = false;
     let hasReplied = false;
 
     const mockInteraction = {
@@ -197,7 +340,10 @@ export function createMockInteraction(
         member: message.member,
 
         get memberPermissions() {
-            return message.member?.permissions ?? null;
+            return (
+                message.member?.permissions ??
+                null
+            );
         },
 
         channel: message.channel,
@@ -205,14 +351,18 @@ export function createMockInteraction(
         guild: message.guild,
 
         guildId:
-            message.guild?.id ?? null,
+            message.guild?.id ??
+            null,
 
         commandName:
-            commandJson?.name ?? null,
+            commandJson?.name ??
+            null,
 
-        commandId: message.id,
+        commandId:
+            message.id,
 
-        id: message.id,
+        id:
+            message.id,
 
         // ====================================================
         // OPTIONS
@@ -228,48 +378,26 @@ export function createMockInteraction(
             },
 
             getUser(name) {
-                const rawValue =
-                    options.getUser(name);
-
-                if (!rawValue) {
-                    return null;
-                }
-
-                const user =
-                    resolvePrefixUser(
-                        message,
-                        rawValue,
-                    );
-
-                return user;
+                return (
+                    resolvedUsers.get(name) ??
+                    null
+                );
             },
 
             getMember(name) {
-                const rawValue =
-                    options.getUser(name);
+                const user =
+                    resolvedUsers.get(name);
 
-                if (!rawValue) {
+                if (!user || !message.guild) {
                     return null;
                 }
 
-                const userId =
-                    resolveUserId(rawValue);
-
-                if (!userId) {
-                    return null;
-                }
-
-                const cachedMember =
-                    message.guild
-                        ?.members
-                        ?.cache
-                        ?.get(userId);
-
-                if (cachedMember) {
-                    return cachedMember;
-                }
-
-                return null;
+                return (
+                    message.guild.members.cache.get(
+                        user.id,
+                    ) ??
+                    null
+                );
             },
 
             getChannel(name) {
@@ -345,17 +473,19 @@ export function createMockInteraction(
             },
 
             _hoistedOptions:
-                args.map((arg, index) => ({
-                    name:
-                        commandJson
-                            ?.options?.[index]
-                            ?.name ||
-                        `arg${index}`,
+                args.map(
+                    (arg, index) => ({
+                        name:
+                            commandJson
+                                ?.options?.[index]
+                                ?.name ||
+                            `arg${index}`,
 
-                    value: arg,
+                        value: arg,
 
-                    type: 3,
-                })),
+                        type: 3,
+                    }),
+                ),
         },
 
         createdTimestamp:
@@ -367,41 +497,51 @@ export function createMockInteraction(
         _commandStartTime:
             commandStartTime,
 
-        _isPrefixCommand: true,
+        _isPrefixCommand:
+            true,
 
-        client: message.client,
+        client:
+            message.client,
 
-        deferred: false,
+        deferred:
+            false,
 
-        replied: false,
+        replied:
+            false,
 
-        ephemeral: false,
+        ephemeral:
+            false,
 
-        webhook: null,
+        webhook:
+            null,
 
-        _replyMessage: null,
+        _replyMessage:
+            null,
 
         // ====================================================
-        // DIRECT PREFIX REPLY HANDLING
-        //
-        // IMPORTANT:
-        // Prefix commands must respond in the channel where
-        // the original prefix command was sent.
-        //
-        // We deliberately do NOT let the ResponseCoordinator
-        // create the actual prefix response message.
+        // DIRECT PREFIX RESPONSE
         // ====================================================
 
         reply: async (payload) => {
-            if (hasReplied && replyMessage) {
-                return mockInteraction.editReply(payload);
+            if (
+                hasReplied &&
+                replyMessage
+            ) {
+                return mockInteraction.editReply(
+                    payload,
+                );
             }
 
             replyMessage =
-                await message.channel.send(payload);
+                await message.channel.send(
+                    payload,
+                );
 
             hasReplied = true;
-            mockInteraction.replied = true;
+
+            mockInteraction.replied =
+                true;
+
             mockInteraction._replyMessage =
                 replyMessage;
 
@@ -411,10 +551,15 @@ export function createMockInteraction(
         editReply: async (payload) => {
             if (!replyMessage) {
                 replyMessage =
-                    await message.channel.send(payload);
+                    await message.channel.send(
+                        payload,
+                    );
 
                 hasReplied = true;
-                mockInteraction.replied = true;
+
+                mockInteraction.replied =
+                    true;
+
                 mockInteraction._replyMessage =
                     replyMessage;
 
@@ -422,9 +567,13 @@ export function createMockInteraction(
             }
 
             const edited =
-                await replyMessage.edit(payload);
+                await replyMessage.edit(
+                    payload,
+                );
 
-            mockInteraction.replied = true;
+            mockInteraction.replied =
+                true;
+
             mockInteraction._replyMessage =
                 edited;
 
@@ -432,12 +581,14 @@ export function createMockInteraction(
         },
 
         followUp: async (payload) => {
-            return message.channel.send(payload);
+            return message.channel.send(
+                payload,
+            );
         },
 
         deferReply: async () => {
-            isDeferred = true;
-            mockInteraction.deferred = true;
+            mockInteraction.deferred =
+                true;
 
             return mockInteraction;
         },
@@ -455,23 +606,26 @@ export function createMockInteraction(
                 replyMessage.deletable
             ) {
                 await replyMessage.delete();
-                replyMessage = null;
-                mockInteraction._replyMessage = null;
-                return null;
+
+                replyMessage =
+                    null;
+
+                mockInteraction._replyMessage =
+                    null;
+
+                mockInteraction.replied =
+                    false;
             }
 
             return null;
         },
 
-        _responseCoordinator: null,
+        _responseCoordinator:
+            null,
     };
 
     // ========================================================
-    // ATTACH RESPONSE COORDINATOR
-    //
-    // The coordinator is still used by permission/usage
-    // infrastructure, but actual command responses above are
-    // forced into message.channel.
+    // RESPONSE COORDINATOR
     // ========================================================
 
     try {
@@ -493,10 +647,7 @@ export function createMockInteraction(
     }
 
     // ========================================================
-    // INTERACTION HELPER PATCH
-    //
-    // Some commands use InteractionHelper.safeDefer(),
-    // safeEditReply(), etc.
+    // INTERACTION HELPER
     // ========================================================
 
     try {
@@ -511,87 +662,112 @@ export function createMockInteraction(
     }
 
     // ========================================================
-    // RESTORE OUR DIRECT PREFIX RESPONSE METHODS
-    //
-    // InteractionHelper/ResponseCoordinator may patch these.
-    // Prefix commands MUST use our channel-local methods.
+    // RESTORE DIRECT PREFIX METHODS
     // ========================================================
 
-    mockInteraction.reply = async (payload) => {
-        if (hasReplied && replyMessage) {
-            return mockInteraction.editReply(payload);
-        }
+    mockInteraction.reply =
+        async (payload) => {
+            if (
+                hasReplied &&
+                replyMessage
+            ) {
+                return mockInteraction.editReply(
+                    payload,
+                );
+            }
 
-        replyMessage =
-            await message.channel.send(payload);
-
-        hasReplied = true;
-        mockInteraction.replied = true;
-        mockInteraction._replyMessage =
-            replyMessage;
-
-        return replyMessage;
-    };
-
-    mockInteraction.editReply = async (payload) => {
-        if (!replyMessage) {
             replyMessage =
-                await message.channel.send(payload);
+                await message.channel.send(
+                    payload,
+                );
 
             hasReplied = true;
-            mockInteraction.replied = true;
+
+            mockInteraction.replied =
+                true;
+
             mockInteraction._replyMessage =
                 replyMessage;
 
             return replyMessage;
-        }
+        };
 
-        const edited =
-            await replyMessage.edit(payload);
+    mockInteraction.editReply =
+        async (payload) => {
+            if (!replyMessage) {
+                replyMessage =
+                    await message.channel.send(
+                        payload,
+                    );
 
-        mockInteraction.replied = true;
-        mockInteraction._replyMessage =
-            edited;
+                hasReplied = true;
 
-        return edited;
-    };
+                mockInteraction.replied =
+                    true;
 
-    mockInteraction.followUp = async (payload) => {
-        return message.channel.send(payload);
-    };
+                mockInteraction._replyMessage =
+                    replyMessage;
 
-    mockInteraction.deferReply = async () => {
-        isDeferred = true;
-        mockInteraction.deferred = true;
-        return mockInteraction;
-    };
+                return replyMessage;
+            }
 
-    mockInteraction.fetchReply = async () => {
-        return (
-            replyMessage ||
-            message
-        );
-    };
+            const edited =
+                await replyMessage.edit(
+                    payload,
+                );
 
-    mockInteraction.deleteReply = async () => {
-        if (
-            replyMessage &&
-            replyMessage.deletable
-        ) {
-            await replyMessage.delete();
-
-            replyMessage = null;
+            mockInteraction.replied =
+                true;
 
             mockInteraction._replyMessage =
-                null;
+                edited;
 
-            mockInteraction.replied = false;
+            return edited;
+        };
+
+    mockInteraction.followUp =
+        async (payload) => {
+            return message.channel.send(
+                payload,
+            );
+        };
+
+    mockInteraction.deferReply =
+        async () => {
+            mockInteraction.deferred =
+                true;
+
+            return mockInteraction;
+        };
+
+    mockInteraction.fetchReply =
+        async () => {
+            return (
+                replyMessage ||
+                message
+            );
+        };
+
+    mockInteraction.deleteReply =
+        async () => {
+            if (
+                replyMessage &&
+                replyMessage.deletable
+            ) {
+                await replyMessage.delete();
+
+                replyMessage =
+                    null;
+
+                mockInteraction._replyMessage =
+                    null;
+
+                mockInteraction.replied =
+                    false;
+            }
 
             return null;
-        }
-
-        return null;
-    };
+        };
 
     return mockInteraction;
 }
@@ -617,7 +793,9 @@ export function supportsPrefixExecution(command) {
 
     if (
         commandName &&
-        SLASH_ONLY_COMMANDS.has(commandName)
+        SLASH_ONLY_COMMANDS.has(
+            commandName,
+        )
     ) {
         return false;
     }
@@ -673,10 +851,6 @@ export async function executePrefixCommand(
     const commandName =
         getCommandName(command);
 
-    // ========================================================
-    // BLACKLIST
-    // ========================================================
-
     if (
         isBlacklisted(
             message.author.id,
@@ -721,7 +895,7 @@ export async function executePrefixCommand(
 
     try {
         mockInteraction =
-            createMockInteraction(
+            await createMockInteraction(
                 message,
                 command.data,
                 args,
@@ -783,23 +957,21 @@ export async function executePrefixCommand(
                     validation,
                 );
             } else {
-                await mockInteraction.reply(
-                    {
-                        content:
-                            buildPrefixUsage(
-                                prefix,
-                                command,
-                                validation,
-                            ),
-                    },
-                );
+                await mockInteraction.reply({
+                    content:
+                        buildPrefixUsage(
+                            prefix,
+                            command,
+                            validation,
+                        ),
+                });
             }
 
             return;
         }
 
         // ====================================================
-        // EXECUTE PREFIX COMMAND
+        // EXECUTE
         // ====================================================
 
         if (
