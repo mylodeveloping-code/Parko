@@ -45,17 +45,13 @@ export default {
             o
                 .setName('target')
                 .setRequired(true)
-                .setDescription(
-                    'User to warn',
-                ),
+                .setDescription('User to warn')
         )
         .addStringOption((o) =>
             o
                 .setName('reason')
                 .setRequired(true)
-                .setDescription(
-                    'Reason for the warning',
-                ),
+                .setDescription('Reason for the warning')
         )
         .setDefaultMemberPermissions(
             PermissionFlagsBits.ModerateMembers,
@@ -68,28 +64,41 @@ export default {
         config,
         client,
     ) {
-        const deferSuccess =
-            await InteractionHelper.safeDefer(
-                interaction,
-            );
+        const isPrefixCommand =
+            interaction._isPrefixCommand === true;
 
-        if (!deferSuccess) {
-            logger.warn(
-                'Warn interaction defer failed',
-                {
-                    userId:
-                        interaction.user.id,
+        // ====================================================
+        // SLASH COMMAND DEFER
+        // ====================================================
 
-                    guildId:
-                        interaction.guildId,
+        if (!isPrefixCommand) {
+            const deferSuccess =
+                await InteractionHelper.safeDefer(
+                    interaction,
+                );
 
-                    commandName:
-                        'warn',
-                },
-            );
+            if (!deferSuccess) {
+                logger.warn(
+                    'Warn interaction defer failed',
+                    {
+                        userId:
+                            interaction.user.id,
 
-            return;
+                        guildId:
+                            interaction.guildId,
+
+                        commandName:
+                            'warn',
+                    },
+                );
+
+                return;
+            }
         }
+
+        // ====================================================
+        // TARGET / REASON
+        // ====================================================
 
         const target =
             interaction.options.getUser(
@@ -272,20 +281,45 @@ export default {
                     },
                 );
 
-                await InteractionHelper.safeEditReply(
-                    interaction,
-                    {
-                        embeds: [
-                            warningEmbed(
-                                `⚠️ **Warned** ${target.tag}`,
-                                `**Reason:** ${reason}\n` +
-                                `**Warning #:** ${totalCount}\n\n` +
-                                `⚠️ The warning was recorded, but I could not update the warning roles.\n` +
-                                `Make sure I have **Manage Roles** permission and that my bot role is above all three warning roles.`,
-                            ),
-                        ],
-                    },
-                );
+                const roleErrorPayload = {
+                    embeds: [
+                        warningEmbed(
+                            `⚠️ **Warned** ${target.tag}`,
+                            `**Reason:** ${reason}\n` +
+                            `**Warning #:** ${totalCount}\n\n` +
+                            `⚠️ The warning was recorded, but I could not update the warning roles.\n` +
+                            `Make sure I have **Manage Roles** permission and that my bot role is above all three warning roles.`,
+                        ),
+                    ],
+                };
+
+                if (isPrefixCommand) {
+                    const generalChannel =
+                        guild.channels.cache.find(
+                            (channel) =>
+                                channel.name?.toLowerCase() ===
+                                    'general' &&
+                                channel.isTextBased?.(),
+                        );
+
+                    if (generalChannel) {
+                        await generalChannel.send(
+                            roleErrorPayload,
+                        );
+                    } else {
+                        logger.warn(
+                            `Could not find #general to send warn result.`,
+                            {
+                                guildId,
+                            },
+                        );
+                    }
+                } else {
+                    await InteractionHelper.safeEditReply(
+                        interaction,
+                        roleErrorPayload,
+                    );
+                }
 
                 return;
             }
@@ -534,12 +568,6 @@ export default {
         // ====================================================
         // LOG MODERATION ACTION
         // ====================================================
-        //
-        // IMPORTANT:
-        // Pass the originating channel so the public
-        // moderation notification stays in the same channel
-        // as the command.
-        //
 
         await logModerationAction({
             client,
@@ -597,27 +625,88 @@ export default {
         // SUCCESS RESPONSE
         // ====================================================
 
-        await InteractionHelper.safeEditReply(
-            interaction,
-            {
-                embeds: [
-                    successEmbed(
+        const successPayload = {
+            embeds: [
+                successEmbed(
+                    totalCount === 3 &&
+                    wasBanned
+                        ? `🔨 **Banned** ${target.tag}`
+                        : `⚠️ **Warned** ${target.tag}`,
+
+                    `**Reason:** ${reason}\n` +
+                    `**Warning #:** ${totalCount}` +
+                    (
                         totalCount === 3 &&
                         wasBanned
-                            ? `🔨 **Banned** ${target.tag}`
-                            : `⚠️ **Warned** ${target.tag}`,
-
-                        `**Reason:** ${reason}\n` +
-                        `**Warning #:** ${totalCount}` +
-                        (
-                            totalCount === 3 &&
-                            wasBanned
-                                ? `\n\n🔨 **This was their third warning. They have been banned for 30 days.**`
-                                : ''
-                        ),
+                            ? `\n\n🔨 **This was their third warning. They have been banned for 30 days.**`
+                            : ''
                     ),
-                ],
-            },
+                ),
+            ],
+        };
+
+        // ====================================================
+        // PREFIX COMMAND SUCCESS RESPONSE
+        // ====================================================
+        //
+        // Prefix commands should NOT respond in the channel
+        // where >warn was executed.
+        //
+        // Instead, send the public warning result to #general.
+        //
+
+        if (isPrefixCommand) {
+            const generalChannel =
+                guild.channels.cache.find(
+                    (channel) =>
+                        channel.name?.toLowerCase() ===
+                            'general' &&
+                        channel.isTextBased?.(),
+                );
+
+            if (!generalChannel) {
+                logger.warn(
+                    `Could not find #general to send warn result.`,
+                    {
+                        guildId,
+                        targetId:
+                            target.id,
+                        warningId:
+                            id,
+                    },
+                );
+
+                return;
+            }
+
+            try {
+                await generalChannel.send(
+                    successPayload,
+                );
+            } catch (error) {
+                logger.error(
+                    `Failed to send warn result to #general.`,
+                    {
+                        guildId,
+                        targetId:
+                            target.id,
+                        warningId:
+                            id,
+                        error,
+                    },
+                );
+            }
+
+            return;
+        }
+
+        // ====================================================
+        // SLASH COMMAND SUCCESS RESPONSE
+        // ====================================================
+
+        await InteractionHelper.safeEditReply(
+            interaction,
+            successPayload,
         );
     },
 };
