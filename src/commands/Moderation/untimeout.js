@@ -164,7 +164,6 @@ export default {
     {
         embeds: [
             successEmbed(
-                '🔓 Timeout Removed',
                 `<@${targetUser.id}> has been unmuted. | ${targetUser.id}`
             ),
         ],
