@@ -551,9 +551,8 @@ export default {
         // This is the ONLY public response for prefix commands.
         //
         // IMPORTANT:
-        // Do NOT pass interaction.channel here.
-        // The moderation logger will use its own configured
-        // moderation/log channel.
+        // Pass interaction.channel so the moderation notification
+        // is sent in the SAME channel where the command was used.
         //
 
         await logModerationAction({
@@ -572,6 +571,11 @@ export default {
                     `${moderator.tag} (${moderator.id})`,
 
                 reason,
+
+                // This tells moderationService.js exactly where
+                // the warning command was executed.
+                channel:
+                    interaction.channel,
 
                 metadata: {
                     userId:
