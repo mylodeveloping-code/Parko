@@ -53,7 +53,6 @@ function parsePrefixDuration(value) {
         .trim()
         .toLowerCase();
 
-    // Plain number = minutes.
     if (/^\d+$/.test(input)) {
         const minutes = Number(input);
 
@@ -165,8 +164,6 @@ function extractUserId(value) {
 
     const input = String(value).trim();
 
-    // <@123456789>
-    // <@!123456789>
     const mentionMatch = input.match(
         /^<@!?(\d+)>$/
     );
@@ -175,7 +172,6 @@ function extractUserId(value) {
         return mentionMatch[1];
     }
 
-    // Raw Discord user ID.
     if (/^\d{17,20}$/.test(input)) {
         return input;
     }
@@ -184,32 +180,38 @@ function extractUserId(value) {
 }
 
 // ============================================================
-// PREFIX USER/MEMBER RESOLUTION
+// PREFIX TARGET RESOLUTION
 // ============================================================
 //
-// IMPORTANT:
-// Prefix commands receive raw arguments rather than Discord's
-// normal slash-command resolved User objects.
-//
-// This resolver therefore explicitly resolves:
-//
+// Resolves:
 //   >mute @user 10m reason
-//   >mute <@123456789> 10m reason
-//   >mute 123456789 10m reason
+//   >mute <@ID> 10m reason
+//   >mute ID 10m reason
 //
-// The raw ID is first looked up in the guild member cache and
-// then fetched directly from Discord.
+// The resolver first checks the member cache.
+// If not cached, it resolves the Discord User and then
+// explicitly resolves that user's GuildMember.
 //
 // ============================================================
 
 async function resolvePrefixTarget(
     interaction,
-    rawTarget
+    rawTarget,
+    client
 ) {
     if (
         !interaction.guild ||
         !rawTarget
     ) {
+        logger.warn(
+            'Prefix timeout target resolution failed: missing guild or target.',
+            {
+                rawTarget,
+                guildId:
+                    interaction.guild?.id,
+            }
+        );
+
         return null;
     }
 
@@ -217,15 +219,24 @@ async function resolvePrefixTarget(
         extractUserId(rawTarget);
 
     if (!userId) {
-        logger.debug(
-            `Invalid prefix timeout target: ${String(rawTarget)}`
+        logger.warn(
+            'Prefix timeout target resolution failed: invalid user ID.',
+            {
+                rawTarget,
+                guildId:
+                    interaction.guild.id,
+            }
         );
 
         return null;
     }
 
+    logger.debug(
+        `Resolving prefix timeout target ${userId} in guild ${interaction.guild.id}`
+    );
+
     // ========================================================
-    // CACHE
+    // 1. MEMBER CACHE
     // ========================================================
 
     const cachedMember =
@@ -234,42 +245,81 @@ async function resolvePrefixTarget(
         );
 
     if (cachedMember) {
+        logger.debug(
+            `Prefix timeout target ${userId} found in guild member cache.`
+        );
+
         return cachedMember;
     }
 
     // ========================================================
-    // DIRECT GUILD MEMBER FETCH
+    // 2. RESOLVE USER
     // ========================================================
-    //
-    // Use the Snowflake directly here.
-    //
-    // This is intentionally:
-    //
-    // guild.members.fetch(userId)
-    //
-    // instead of:
-    //
-    // guild.members.fetch({ user: userId, force: true })
-    //
+
+    let user = null;
+
+    try {
+        user =
+            client.users.cache.get(
+                userId
+            ) ||
+            await client.users.fetch(
+                userId
+            );
+
+        logger.debug(
+            `Prefix timeout target ${userId} resolved as Discord user.`
+        );
+    } catch (error) {
+        logger.warn(
+            `Could not resolve Discord user ${userId} for prefix timeout.`,
+            {
+                userId,
+                guildId:
+                    interaction.guild.id,
+                error,
+            }
+        );
+
+        return null;
+    }
+
+    if (!user) {
+        logger.warn(
+            `Discord returned no user for ${userId}.`
+        );
+
+        return null;
+    }
+
+    // ========================================================
+    // 3. RESOLVE GUILD MEMBER
     // ========================================================
 
     try {
         const member =
             await interaction.guild.members.fetch(
-                userId
+                {
+                    user: user.id,
+                    force: true,
+                }
             );
 
         if (member) {
+            logger.debug(
+                `Prefix timeout target ${userId} successfully resolved as guild member.`
+            );
+
             return member;
         }
     } catch (error) {
-        logger.debug(
-            `Unable to fetch prefix timeout target ${userId} from guild ${interaction.guild.id}`,
+        logger.warn(
+            `User ${userId} exists, but could not be resolved as a member of guild ${interaction.guild.id}.`,
             {
-                error,
                 userId,
                 guildId:
                     interaction.guild.id,
+                error,
             }
         );
     }
@@ -361,7 +411,6 @@ export default {
         config,
         client
     ) {
-
         const rawArgs =
             interaction.options?._positional || [];
 
@@ -378,6 +427,18 @@ export default {
                 .trim() ||
             'No reason provided';
 
+        logger.debug(
+            'Prefix timeout command arguments:',
+            {
+                rawArgs,
+                targetInput,
+                durationInput,
+                reason,
+                guildId:
+                    interaction.guildId,
+            }
+        );
+
         // ====================================================
         // TARGET
         // ====================================================
@@ -385,7 +446,8 @@ export default {
         const member =
             await resolvePrefixTarget(
                 interaction,
-                targetInput
+                targetInput,
+                client
             );
 
         if (!member) {
@@ -578,7 +640,6 @@ export default {
         config,
         client
     ) {
-
         const deferSuccess =
             await InteractionHelper.safeDefer(
                 interaction
