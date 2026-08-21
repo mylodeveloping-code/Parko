@@ -159,11 +159,12 @@ export default {
         // RESPONSE
         // ====================================================
 
-  await InteractionHelper.safeEditReply(
+await InteractionHelper.safeEditReply(
     interaction,
     {
         embeds: [
             successEmbed(
+                '',
                 `<@${targetUser.id}> has been unmuted. | ${targetUser.id}`
             ),
         ],
