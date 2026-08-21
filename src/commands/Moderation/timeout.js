@@ -1,5 +1,6 @@
 import {
     SlashCommandBuilder,
+    PermissionFlagsBits,
 } from 'discord.js';
 
 import { successEmbed } from '../../utils/embeds.js';
@@ -60,46 +61,34 @@ export default {
             option
                 .setName('reason')
                 .setDescription('Reason for the timeout')
+        )
+
+        .setDefaultMemberPermissions(
+            PermissionFlagsBits.ModerateMembers
         ),
 
     category: 'moderation',
 
     async execute(interaction, config, client) {
-        const isPrefixCommand =
-            interaction._isPrefixCommand === true;
+        const deferSuccess =
+            await InteractionHelper.safeDefer(interaction);
 
-        // ====================================================
-        // SLASH COMMAND DEFER
-        // ====================================================
+        if (!deferSuccess) {
+            logger.warn(
+                'Timeout interaction defer failed',
+                {
+                    userId: interaction.user.id,
+                    guildId: interaction.guildId,
+                    commandName: 'timeout',
+                }
+            );
 
-        if (!isPrefixCommand) {
-            const deferSuccess =
-                await InteractionHelper.safeDefer(
-                    interaction
-                );
-
-            if (!deferSuccess) {
-                logger.warn(
-                    'Timeout interaction defer failed',
-                    {
-                        userId:
-                            interaction.user.id,
-
-                        guildId:
-                            interaction.guildId,
-
-                        commandName:
-                            'timeout',
-                    }
-                );
-
-                return;
-            }
+            return;
         }
 
-        // ====================================================
+        // ============================================
         // TARGET / DURATION / REASON
-        // ====================================================
+        // ============================================
 
         const targetUser =
             interaction.options.getUser('target');
@@ -130,15 +119,11 @@ export default {
             );
         }
 
-        // ====================================================
+        // ============================================
         // MODERATION EXEMPTION
-        // ====================================================
+        // ============================================
 
-        if (
-            isModerationExempt(
-                targetUser.id
-            )
-        ) {
+        if (isModerationExempt(targetUser.id)) {
             throw new TitanBotError(
                 'User is moderation exempt',
                 ErrorTypes.VALIDATION,
@@ -146,9 +131,9 @@ export default {
             );
         }
 
-        // ====================================================
+        // ============================================
         // SELF CHECK
-        // ====================================================
+        // ============================================
 
         if (
             targetUser.id ===
@@ -161,9 +146,9 @@ export default {
             );
         }
 
-        // ====================================================
+        // ============================================
         // BOT CHECK
-        // ====================================================
+        // ============================================
 
         if (
             targetUser.id ===
@@ -176,9 +161,9 @@ export default {
             );
         }
 
-        // ====================================================
-        // RESOLVE GUILD MEMBER
-        // ====================================================
+        // ============================================
+        // RESOLVE MEMBER
+        // ============================================
 
         const member =
             await resolveModerationTarget(
@@ -194,14 +179,9 @@ export default {
             );
         }
 
-        // ====================================================
+        // ============================================
         // MODERATION HIERARCHY
-        // ====================================================
-        //
-        // This checks the moderator's position relative to
-        // the target. The moderator does NOT need Discord's
-        // Administrator permission for this check to work.
-        //
+        // ============================================
 
         ModerationService.assertModerationHierarchy(
             interaction.member,
@@ -209,18 +189,18 @@ export default {
             'timeout'
         );
 
-        // ====================================================
+        // ============================================
         // CONVERT DURATION
-        // ====================================================
+        // ============================================
 
         const durationMs =
             durationMinutes *
             60 *
             1000;
 
-        // ====================================================
+        // ============================================
         // PERFORM TIMEOUT
-        // ====================================================
+        // ============================================
 
         const result =
             await ModerationService.timeoutUser({
@@ -245,20 +225,36 @@ export default {
             )?.name ||
             `${durationMinutes} minutes`;
 
-        // ====================================================
-        // SUCCESS
-        // ====================================================
+        // ============================================
+        // RESPONSE IN THE SAME CHANNEL
+        // ============================================
 
         await InteractionHelper.safeEditReply(
             interaction,
             {
-                embeds: [
-                    successEmbed(
-                        `⏳ **Timed out** ${targetUser.tag} for ${durationDisplay}.`,
-                        `**Reason:** ${reason}\n` +
-                        `**Case ID:** #${result.caseId}`
-                    ),
-                ],
+                content:
+                    `<@${targetUser.id}> has been timed out for ${durationDisplay} | ${targetUser.id}`,
+                embeds: [],
+            }
+        );
+
+        logger.info(
+            `Sent timeout confirmation for ${targetUser.tag}`,
+            {
+                userId:
+                    targetUser.id,
+
+                guildId:
+                    interaction.guildId,
+
+                moderatorId:
+                    interaction.user.id,
+
+                duration:
+                    durationDisplay,
+
+                caseId:
+                    result.caseId,
             }
         );
     },
