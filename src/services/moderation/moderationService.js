@@ -278,6 +278,24 @@ export class ModerationService {
       };
     }
 
+    /*
+     * The bot cannot modify the server owner.
+     */
+    if (
+      target.guild.ownerId ===
+      target.id
+    ) {
+      return {
+        valid: false,
+        error:
+          `I cannot ${action} the server owner.`,
+      };
+    }
+
+    /*
+     * Discord does not allow a bot to manage a role
+     * that is equal to or higher than the bot's highest role.
+     */
     if (
       botRole.position <=
       targetRole.position
@@ -340,9 +358,9 @@ export class ModerationService {
     }
   }
 
-  // ==========================================================
+  // ============================================================
   // BAN
-  // ==========================================================
+  // ============================================================
 
   static async banUser({
     guild,
@@ -365,8 +383,6 @@ export class ModerationService {
         );
       }
 
-      // Parse the optional duration.
-      // null = permanent ban.
       const durationMs =
         parseDuration(length);
 
@@ -388,10 +404,6 @@ export class ModerationService {
           'Target not in guild, proceeding with ban'
         );
       }
-
-      // ======================================================
-      // HIERARCHY
-      // ======================================================
 
       if (targetMember) {
         this.assertModerationHierarchy(
@@ -422,10 +434,6 @@ export class ModerationService {
         }
       }
 
-      // ======================================================
-      // BAN
-      // ======================================================
-
       await guild.members.ban(
         user.id,
         {
@@ -437,10 +445,6 @@ export class ModerationService {
             60,
         }
       );
-
-      // ======================================================
-      // LOG
-      // ======================================================
 
       const caseId =
         await logModerationAction({
@@ -488,10 +492,6 @@ export class ModerationService {
             : ' permanently'
         )
       );
-
-      // ======================================================
-      // AUTOMATIC UNBAN
-      // ======================================================
 
       if (durationMs) {
         setTimeout(
@@ -700,23 +700,60 @@ export class ModerationService {
         );
       }
 
+      /*
+       * IMPORTANT:
+       *
+       * We still enforce Discord's hierarchy rules.
+       *
+       * This means the bot must be ABOVE the target's
+       * highest role. If the target has Administrator,
+       * the Administrator role must therefore also be
+       * below the bot's role.
+       *
+       * The moderator must also be above the target,
+       * unless the moderator is the server owner.
+       */
       this.assertModerationHierarchy(
         moderator,
         member,
         'timeout'
       );
 
-      if (!member.moderatable) {
-        const targetLabel =
-          getTargetLabel(member);
+      const botMember =
+        guild.members.me;
 
+      if (!botMember) {
         throw new TitanBotError(
-          'Cannot timeout member',
-          ErrorTypes.PERMISSION,
-          `I cannot timeout **${targetLabel}**. They may have **Administrator** permission or a managed/integration role. ` +
-          'Ensure my bot role is above the Muted role.'
+          'Bot member unavailable',
+          ErrorTypes.INTERNAL,
+          'I could not resolve my bot member in this server.'
         );
       }
+
+      /*
+       * A server owner cannot be modified.
+       */
+      if (
+        guild.ownerId ===
+        member.id
+      ) {
+        throw new TitanBotError(
+          'Cannot timeout server owner',
+          ErrorTypes.PERMISSION,
+          'I cannot timeout the server owner.'
+        );
+      }
+
+      /*
+       * ========================================================
+       * SAVE ORIGINAL ROLES FIRST
+       * ========================================================
+       *
+       * This must happen BEFORE removing anything.
+       *
+       * The saved list is later used to restore the user's
+       * roles after the timeout expires.
+       */
 
       const previousRoleIds =
         getMemberRoleIds(member);
@@ -747,28 +784,179 @@ export class ModerationService {
         );
       }
 
+      /*
+       * ========================================================
+       * ADMINISTRATOR SUPPORT
+       * ========================================================
+       *
+       * Discord's native timeout cannot be applied while a
+       * member has Administrator permission.
+       *
+       * Therefore, before calling member.timeout(), we remove
+       * every role that the bot can manage.
+       *
+       * The roles were already saved above, so they can be
+       * restored automatically later.
+       */
+
+      const removableRoles =
+        member.roles.cache.filter(
+          (role) =>
+            role.id !== guild.id &&
+            !role.managed &&
+            role.editable &&
+            role.position <
+              botMember.roles.highest.position
+        );
+
+      /*
+       * Remove manageable roles.
+       *
+       * This includes an Administrator role if the bot is
+       * positioned above it.
+       */
+      if (removableRoles.size > 0) {
+        try {
+          await member.roles.remove(
+            removableRoles,
+            'Removing roles for timeout/mute'
+          );
+
+          logger.info(
+            `Removed ${removableRoles.size} role(s) from ` +
+            `${member.user.tag} for timeout`,
+            {
+              userId:
+                member.id,
+
+              guildId:
+                guild.id,
+
+              rolesRemoved:
+                [...removableRoles.values()].map(
+                  (role) => role.id
+                ),
+            }
+          );
+        } catch (roleError) {
+          logger.error(
+            `Failed to remove roles from ${member.user.tag} before timeout`,
+            {
+              userId:
+                member.id,
+
+              guildId:
+                guild.id,
+
+              error:
+                roleError,
+            }
+          );
+
+          throw new TitanBotError(
+            'Could not remove user roles',
+            ErrorTypes.PERMISSION,
+            'I could not temporarily remove the user\'s roles. Make sure my bot role is above all of the user\'s roles and that I have Manage Roles permission.'
+          );
+        }
+      }
+
+      /*
+       * ========================================================
+       * APPLY MUTED ROLE
+       * ========================================================
+       */
+
       const mutedApplied =
         await applyMutedRole(
           member
         );
 
       if (!mutedApplied) {
+        /*
+         * Try to restore the original roles if applying the
+         * muted role failed.
+         */
+        try {
+          await restoreTimeoutRoles(
+            member
+          );
+        } catch (restoreError) {
+          logger.error(
+            'Failed to restore roles after muted role failure',
+            restoreError
+          );
+        }
+
         throw new TitanBotError(
           'Could not apply muted role',
           ErrorTypes.PERMISSION,
-          'I could not apply the Muted role. Check that my bot role is above the Muted role.'
+          'I could not apply the Muted role. Check that my bot role is above the Muted role and that I have Manage Roles permission.'
         );
       }
 
-      await member.timeout(
-        durationMs,
-        reason
-      );
+      /*
+       * ========================================================
+       * DISCORD NATIVE TIMEOUT
+       * ========================================================
+       *
+       * At this point Administrator permissions have been
+       * removed (if the user had them), so Discord can apply
+       * the native timeout.
+       */
+
+      try {
+        await member.timeout(
+          durationMs,
+          reason
+        );
+      } catch (timeoutError) {
+        /*
+         * If Discord's native timeout fails, attempt to undo
+         * everything we changed.
+         */
+        logger.error(
+          `Native Discord timeout failed for ${member.user.tag}`,
+          {
+            userId:
+              member.id,
+
+            guildId:
+              guild.id,
+
+            error:
+              timeoutError,
+          }
+        );
+
+        try {
+          await restoreTimeoutRoles(
+            member
+          );
+        } catch (restoreError) {
+          logger.error(
+            `Failed to restore roles after timeout failure for ${member.user.tag}`,
+            restoreError
+          );
+        }
+
+        throw new TitanBotError(
+          'Discord timeout failed',
+          ErrorTypes.PERMISSION,
+          `I could not apply the Discord timeout to **${getTargetLabel(member)}**. Make sure I have **Moderate Members** and **Manage Roles**, and that my bot role is above the target's roles.`
+        );
+      }
 
       const durationMinutes =
         Math.floor(
           durationMs / 60000
         );
+
+      /*
+       * ========================================================
+       * LOG MODERATION CASE
+       * ========================================================
+       */
 
       const caseId =
         await logModerationAction({
@@ -805,6 +993,21 @@ export class ModerationService {
 
               mutedRoleId:
                 '1537615321438093425',
+
+              previousRoleIds,
+
+              administratorRolesRemoved:
+                removableRoles
+                  .filter(
+                    (role) =>
+                      role.permissions.has(
+                        PermissionFlagsBits.Administrator
+                      )
+                  )
+                  .map(
+                    (role) =>
+                      role.id
+                  ),
             },
           },
         });
@@ -815,6 +1018,12 @@ export class ModerationService {
         `${moderator.user.tag} in ` +
         `${guild.name}`
       );
+
+      /*
+       * ========================================================
+       * AUTOMATIC EXPIRATION
+       * ========================================================
+       */
 
       setTimeout(
         async () => {
@@ -833,19 +1042,40 @@ export class ModerationService {
               return;
             }
 
-            if (
-              !currentMember.roles.cache.has(
-                '1537615321438093425'
-              )
-            ) {
-              logger.info(
-                `Timeout for ${currentMember.user.tag} ` +
-                `expired, but Muted role was already removed.`
-              );
+            /*
+             * Remove the native Discord timeout first.
+             */
+            try {
+              if (
+                currentMember.isCommunicationDisabled()
+              ) {
+                await currentMember.timeout(
+                  null,
+                  'Timeout duration expired'
+                );
+              }
+            } catch (timeoutError) {
+              logger.error(
+                `Failed to remove native timeout from ${currentMember.user.tag}`,
+                {
+                  userId:
+                    currentMember.id,
 
-              return;
+                  guildId:
+                    guild.id,
+
+                  error:
+                    timeoutError,
+                }
+              );
             }
 
+            /*
+             * Restore the user's original roles.
+             *
+             * restoreTimeoutRoles() is responsible for removing
+             * the Muted role and restoring the saved roles.
+             */
             const restored =
               await restoreTimeoutRoles(
                 currentMember
@@ -910,10 +1140,13 @@ export class ModerationService {
 
       return {
         caseId,
+
         user:
           member.user.tag,
+
         duration:
           durationMinutes,
+
         reason,
       };
     } catch (error) {
@@ -956,15 +1189,16 @@ export class ModerationService {
         'remove the timeout from'
       );
 
-      if (!member.moderatable) {
+      if (
+        !member.moderatable
+      ) {
         const targetLabel =
           getTargetLabel(member);
 
         throw new TitanBotError(
           'Cannot modify member',
           ErrorTypes.PERMISSION,
-          `I cannot modify **${targetLabel}**. They may have **Administrator** permission or a managed/integration role. ` +
-          'Ensure my bot role is above theirs in **Server Settings → Roles**.'
+          `I cannot modify **${targetLabel}**. Ensure my bot role is above theirs in **Server Settings → Roles**.`
         );
       }
 
@@ -1129,8 +1363,10 @@ export class ModerationService {
 
       return {
         caseId,
+
         user:
           user.tag,
+
         reason,
       };
     } catch (error) {
