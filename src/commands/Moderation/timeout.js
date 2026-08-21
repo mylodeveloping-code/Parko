@@ -1,6 +1,5 @@
 import {
     SlashCommandBuilder,
-    PermissionFlagsBits,
 } from 'discord.js';
 
 import { successEmbed } from '../../utils/embeds.js';
@@ -61,30 +60,46 @@ export default {
             option
                 .setName('reason')
                 .setDescription('Reason for the timeout')
-        )
-
-        .setDefaultMemberPermissions(
-            PermissionFlagsBits.ModerateMembers
         ),
 
     category: 'moderation',
 
     async execute(interaction, config, client) {
-        const deferSuccess =
-            await InteractionHelper.safeDefer(interaction);
+        const isPrefixCommand =
+            interaction._isPrefixCommand === true;
 
-        if (!deferSuccess) {
-            logger.warn(
-                'Timeout interaction defer failed',
-                {
-                    userId: interaction.user.id,
-                    guildId: interaction.guildId,
-                    commandName: 'timeout',
-                }
-            );
+        // ====================================================
+        // SLASH COMMAND DEFER
+        // ====================================================
 
-            return;
+        if (!isPrefixCommand) {
+            const deferSuccess =
+                await InteractionHelper.safeDefer(
+                    interaction
+                );
+
+            if (!deferSuccess) {
+                logger.warn(
+                    'Timeout interaction defer failed',
+                    {
+                        userId:
+                            interaction.user.id,
+
+                        guildId:
+                            interaction.guildId,
+
+                        commandName:
+                            'timeout',
+                    }
+                );
+
+                return;
+            }
         }
+
+        // ====================================================
+        // TARGET / DURATION / REASON
+        // ====================================================
 
         const targetUser =
             interaction.options.getUser('target');
@@ -115,11 +130,15 @@ export default {
             );
         }
 
-        // ============================================
+        // ====================================================
         // MODERATION EXEMPTION
-        // ============================================
+        // ====================================================
 
-        if (isModerationExempt(targetUser.id)) {
+        if (
+            isModerationExempt(
+                targetUser.id
+            )
+        ) {
             throw new TitanBotError(
                 'User is moderation exempt',
                 ErrorTypes.VALIDATION,
@@ -127,9 +146,9 @@ export default {
             );
         }
 
-        // ============================================
+        // ====================================================
         // SELF CHECK
-        // ============================================
+        // ====================================================
 
         if (
             targetUser.id ===
@@ -142,9 +161,9 @@ export default {
             );
         }
 
-        // ============================================
+        // ====================================================
         // BOT CHECK
-        // ============================================
+        // ====================================================
 
         if (
             targetUser.id ===
@@ -157,19 +176,9 @@ export default {
             );
         }
 
-        // ============================================
-        // RESOLVE ACTUAL GUILD MEMBER
-        // ============================================
-        //
-        // Do NOT use:
-        //
-        // interaction.options.getMember('target')
-        //
-        // as the authoritative lookup.
-        //
-        // The user can be a real server member while
-        // not currently existing in the local cache.
-        //
+        // ====================================================
+        // RESOLVE GUILD MEMBER
+        // ====================================================
 
         const member =
             await resolveModerationTarget(
@@ -177,8 +186,6 @@ export default {
                 targetUser.id
             );
 
-        // Timeout requires the user to actually be
-        // in this guild.
         if (!member) {
             throw new TitanBotError(
                 'Target not found',
@@ -187,9 +194,14 @@ export default {
             );
         }
 
-        // ============================================
+        // ====================================================
         // MODERATION HIERARCHY
-        // ============================================
+        // ====================================================
+        //
+        // This checks the moderator's position relative to
+        // the target. The moderator does NOT need Discord's
+        // Administrator permission for this check to work.
+        //
 
         ModerationService.assertModerationHierarchy(
             interaction.member,
@@ -197,18 +209,18 @@ export default {
             'timeout'
         );
 
-        // ============================================
+        // ====================================================
         // CONVERT DURATION
-        // ============================================
+        // ====================================================
 
         const durationMs =
             durationMinutes *
             60 *
             1000;
 
-        // ============================================
+        // ====================================================
         // PERFORM TIMEOUT
-        // ============================================
+        // ====================================================
 
         const result =
             await ModerationService.timeoutUser({
@@ -233,9 +245,9 @@ export default {
             )?.name ||
             `${durationMinutes} minutes`;
 
-        // ============================================
+        // ====================================================
         // SUCCESS
-        // ============================================
+        // ====================================================
 
         await InteractionHelper.safeEditReply(
             interaction,
