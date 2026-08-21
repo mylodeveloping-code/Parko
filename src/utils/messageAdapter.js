@@ -527,6 +527,21 @@ export async function createMockInteraction(
         // ----------------------------------------------------
 
         options: {
+            // =================================================
+            // IMPORTANT:
+            // Preserve the original prefix arguments.
+            //
+            // Commands such as timeout.js use:
+            //
+            // interaction.options._positional
+            //
+            // Without this, prefix commands receive an empty
+            // argument list even though the parser parsed them.
+            // =================================================
+
+            _positional:
+                args,
+
             get(name) {
                 return options.get(name);
             },
