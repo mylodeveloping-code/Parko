@@ -3,7 +3,9 @@ import {
     PermissionFlagsBits,
 } from 'discord.js';
 
-import { successEmbed } from '../../utils/embeds.js';
+import {
+    warningEmbed,
+} from '../../utils/embeds.js';
 
 import {
     logger,
@@ -77,9 +79,14 @@ export default {
             logger.warn(
                 'Timeout interaction defer failed',
                 {
-                    userId: interaction.user.id,
-                    guildId: interaction.guildId,
-                    commandName: 'timeout',
+                    userId:
+                        interaction.user.id,
+
+                    guildId:
+                        interaction.guildId,
+
+                    commandName:
+                        'timeout',
                 }
             );
 
@@ -106,7 +113,8 @@ export default {
                 ErrorTypes.USER_INPUT,
                 'You must specify a user to timeout.',
                 {
-                    subtype: 'invalid_user',
+                    subtype:
+                        'invalid_user',
                 }
             );
         }
@@ -123,7 +131,11 @@ export default {
         // MODERATION EXEMPTION
         // ============================================
 
-        if (isModerationExempt(targetUser.id)) {
+        if (
+            isModerationExempt(
+                targetUser.id
+            )
+        ) {
             throw new TitanBotError(
                 'User is moderation exempt',
                 ErrorTypes.VALIDATION,
@@ -226,15 +238,21 @@ export default {
             `${durationMinutes} minutes`;
 
         // ============================================
-        // RESPONSE IN THE SAME CHANNEL
+        // RESPONSE IN SAME CHANNEL
         // ============================================
 
         await InteractionHelper.safeEditReply(
             interaction,
             {
-                content:
-                    `<@${targetUser.id}> has been timed out for ${durationDisplay} | ${targetUser.id}`,
-                embeds: [],
+                content: '',
+                embeds: [
+                    warningEmbed(
+                        `⏳ <@${targetUser.id}> has been timed out | ${targetUser.id}`,
+                        `**Duration:** ${durationDisplay}\n` +
+                        `**Reason:** ${reason}\n` +
+                        `**Case ID:** #${result.caseId}`
+                    ),
+                ],
             }
         );
 

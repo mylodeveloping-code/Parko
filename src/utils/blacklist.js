@@ -1,155 +1,115 @@
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import { logger } from './logger.js';
+import {
+    SlashCommandBuilder,
+    PermissionFlagsBits,
+} from 'discord.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import { successEmbed } from '../../utils/embeds.js';
+import { InteractionHelper } from '../../utils/interactionHelper.js';
 
-// Store the blacklist outside src/utils.
-const DATA_DIR = path.join(__dirname, '../../data');
-const BLACKLIST_FILE = path.join(DATA_DIR, 'blacklist.json');
+import {
+    blacklistUser,
+    isBlacklisted,
+} from '../../utils/blacklist.js';
 
-function ensureBlacklistFile() {
-    try {
-        if (!fs.existsSync(DATA_DIR)) {
-            fs.mkdirSync(DATA_DIR, {
-                recursive: true,
-            });
-        }
+import {
+    TitanBotError,
+    ErrorTypes,
+} from '../../utils/errorHandler.js';
 
-        if (!fs.existsSync(BLACKLIST_FILE)) {
-            fs.writeFileSync(
-                BLACKLIST_FILE,
-                JSON.stringify(
-                    {
-                        users: [],
-                    },
-                    null,
-                    2
-                ),
-                'utf8'
-            );
-        }
-    } catch (error) {
-        logger.error(
-            'Failed to initialize blacklist file:',
-            error
-        );
-    }
-}
-
-function loadBlacklist() {
-    ensureBlacklistFile();
-
-    try {
-        const raw =
-            fs.readFileSync(
-                BLACKLIST_FILE,
-                'utf8'
-            );
-
-        const data =
-            JSON.parse(raw);
-
-        if (
-            !data ||
-            !Array.isArray(data.users)
-        ) {
-            return [];
-        }
-
-        return [
-            ...new Set(
-                data.users.map(
-                    String
-                )
-            ),
-        ];
-    } catch (error) {
-        logger.error(
-            'Failed to load blacklist:',
-            error
-        );
-
-        return [];
-    }
-}
-
-function saveBlacklist(users) {
-    try {
-        ensureBlacklistFile();
-
-        fs.writeFileSync(
-            BLACKLIST_FILE,
-            JSON.stringify(
-                {
-                    users: [
-                        ...new Set(
-                            users.map(
-                                String
-                            )
-                        ),
-                    ],
-                },
-                null,
-                2
-            ),
-            'utf8'
-        );
-
-        return true;
-    } catch (error) {
-        logger.error(
-            'Failed to save blacklist:',
-            error
-        );
-
-        return false;
-    }
-}
-
-export function isBlacklisted(userId) {
-    if (!userId) {
-        return false;
-    }
-
-    const users =
-        loadBlacklist();
-
-    return users.includes(
-        String(userId)
-    );
-}
-
-export function blacklistUser(userId) {
-    if (!userId) {
-        return false;
-    }
-
-    const normalizedId =
-        String(userId).trim();
-
-    if (
-        isBlacklisted(
-            normalizedId
+export default {
+    data: new SlashCommandBuilder()
+        .setName('bl')
+        .setDescription('Blacklist a user from using the bot')
+        .addStringOption((option) =>
+            option
+                .setName('user_id')
+                .setDescription('The Discord user ID to blacklist')
+                .setRequired(true)
         )
-    ) {
-        return false;
-    }
+        .setDefaultMemberPermissions(
+            PermissionFlagsBits.ManageGuild
+        ),
 
-    const users =
-        loadBlacklist();
+    category: 'moderation',
 
-    users.push(
-        normalizedId
-    );
+    async execute(interaction, config, client) {
+        const userId =
+            interaction.options
+                .getString('user_id')
+                ?.trim();
 
-    return saveBlacklist(
-        users
-    );
-}
+        if (!userId) {
+            throw new TitanBotError(
+                'Missing user ID',
+                ErrorTypes.USER_INPUT,
+                'You must provide a Discord user ID.'
+            );
+        }
 
-export function getBlacklistedUsers() {
-    return loadBlacklist();
-}
+        if (!/^\d{17,20}$/.test(userId)) {
+            throw new TitanBotError(
+                'Invalid user ID',
+                ErrorTypes.USER_INPUT,
+                'That does not appear to be a valid Discord user ID.'
+            );
+        }
+
+        if (userId === interaction.user.id) {
+            throw new TitanBotError(
+                'Cannot blacklist self',
+                ErrorTypes.VALIDATION,
+                'You cannot blacklist yourself.'
+            );
+        }
+
+        if (client.user && userId === client.user.id) {
+            throw new TitanBotError(
+                'Cannot blacklist bot',
+                ErrorTypes.VALIDATION,
+                'You cannot blacklist the bot.'
+            );
+        }
+
+        if (isBlacklisted(userId)) {
+            throw new TitanBotError(
+                'Already blacklisted',
+                ErrorTypes.VALIDATION,
+                `User ID \`${userId}\` is already blacklisted.`
+            );
+        }
+
+        const saved = blacklistUser(userId);
+
+        if (!saved) {
+            throw new TitanBotError(
+                'Blacklist failed',
+                ErrorTypes.INTERNAL,
+                'I could not save that blacklist entry.'
+            );
+        }
+
+        let userText = `User ID \`${userId}\``;
+
+        try {
+            const user =
+                await client.users.fetch(userId);
+
+            userText =
+                `${user} (\`${userId}\`)`;
+        } catch {
+            // User does not need to be fetchable.
+        }
+
+        await InteractionHelper.universalReply(
+            interaction,
+            {
+                embeds: [
+                    successEmbed(
+                        `Blacklisted ${userText}`,
+                        `**User:** ${userText}\n**Action:** This user has been blacklisted and can no longer use commands from this bot.`,
+                    ),
+                ],
+            }
+        );
+    },
+};

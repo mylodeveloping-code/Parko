@@ -5,12 +5,19 @@ import {
 
 import { successEmbed } from '../../utils/embeds.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
-import { ModerationService } from '../../services/moderation/moderationService.js';
+
+import {
+    ModerationService,
+} from '../../services/moderation/moderationService.js';
+
 import {
     TitanBotError,
     ErrorTypes,
 } from '../../utils/errorHandler.js';
-import { isModerationExempt } from '../../utils/moderation.js';
+
+import {
+    isModerationExempt,
+} from '../../utils/moderation.js';
 
 export default {
     data: new SlashCommandBuilder()
@@ -68,10 +75,6 @@ export default {
             );
         }
 
-        // ============================================
-        // MODERATION EXEMPTION
-        // ============================================
-
         if (isModerationExempt(user.id)) {
             throw new TitanBotError(
                 'User is moderation exempt',
@@ -79,10 +82,6 @@ export default {
                 'This user is exempt from all moderation actions.'
             );
         }
-
-        // ============================================
-        // SELF-BAN CHECK
-        // ============================================
 
         if (user.id === interaction.user.id) {
             throw new TitanBotError(
@@ -92,10 +91,6 @@ export default {
             );
         }
 
-        // ============================================
-        // BOT CHECK
-        // ============================================
-
         if (user.id === client.user.id) {
             throw new TitanBotError(
                 'Cannot ban bot',
@@ -103,10 +98,6 @@ export default {
                 'You cannot ban the bot.'
             );
         }
-
-        // ============================================
-        // BAN USER
-        // ============================================
 
         const result =
             await ModerationService.banUser({
@@ -117,21 +108,16 @@ export default {
                 length,
             });
 
-        // ============================================
-        // SUCCESS RESPONSE
-        // ============================================
-
         await InteractionHelper.universalReply(
             interaction,
             {
                 embeds: [
                     successEmbed(
-                        `🚫 **Banned** ${user.tag}`,
+                        `Banned ${user}`,
+                        `**User:** ${user} (\`${user.id}\`)\n` +
                         `**Reason:** ${reason}\n` +
-                        `**Length:** ${
-                            result.length || 'Permanent'
-                        }\n` +
-                        `**Case ID:** #${result.caseId}`
+                        `**Length:** ${result.length || 'Permanent'}\n` +
+                        `**Case ID:** #${result.caseId}`,
                     ),
                 ],
             }

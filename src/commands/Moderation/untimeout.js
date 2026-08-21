@@ -3,13 +3,8 @@ import {
     PermissionFlagsBits,
 } from 'discord.js';
 
-import {
-    successEmbed,
-} from '../../utils/embeds.js';
-
-import {
-    logger,
-} from '../../utils/logger.js';
+import { successEmbed } from '../../utils/embeds.js';
+import { logger } from '../../utils/logger.js';
 
 import {
     ModerationService,
@@ -32,30 +27,20 @@ import {
 export default {
     data: new SlashCommandBuilder()
         .setName('untimeout')
-        .setDescription(
-            'Remove timeout from a user'
-        )
-
+        .setDescription('Remove timeout from a user')
         .addUserOption((option) =>
             option
                 .setName('target')
-                .setDescription(
-                    'User to untimeout'
-                )
+                .setDescription('User to untimeout')
                 .setRequired(true)
         )
-
         .setDefaultMemberPermissions(
             PermissionFlagsBits.ModerateMembers
         ),
 
     category: 'moderation',
 
-    async execute(
-        interaction,
-        config,
-        client
-    ) {
+    async execute(interaction, config, client) {
         const deferSuccess =
             await InteractionHelper.safeDefer(
                 interaction
@@ -65,28 +50,17 @@ export default {
             logger.warn(
                 'Untimeout interaction defer failed',
                 {
-                    userId:
-                        interaction.user.id,
-
-                    guildId:
-                        interaction.guildId,
-
-                    commandName:
-                        'untimeout',
+                    userId: interaction.user.id,
+                    guildId: interaction.guildId,
+                    commandName: 'untimeout',
                 }
             );
 
             return;
         }
 
-        // ============================================
-        // GET USER
-        // ============================================
-
         const targetUser =
-            interaction.options.getUser(
-                'target'
-            );
+            interaction.options.getUser('target');
 
         if (!targetUser) {
             throw new TitanBotError(
@@ -94,8 +68,7 @@ export default {
                 ErrorTypes.USER_INPUT,
                 'You must specify a user to untimeout.',
                 {
-                    subtype:
-                        'invalid_user',
+                    subtype: 'invalid_user',
                 }
             );
         }
@@ -108,33 +81,13 @@ export default {
             );
         }
 
-        // ============================================
-        // MODERATION EXEMPTION
-        // ============================================
-
-        if (
-            isModerationExempt(
-                targetUser.id
-            )
-        ) {
+        if (isModerationExempt(targetUser.id)) {
             throw new TitanBotError(
                 'User is moderation exempt',
                 ErrorTypes.VALIDATION,
                 'This user is exempt from all moderation actions.'
             );
         }
-
-        // ============================================
-        // RESOLVE MEMBER
-        // ============================================
-        //
-        // Do not rely on:
-        //
-        // interaction.options.getMember()
-        //
-        // because that can be null when the member
-        // isn't present in the local cache.
-        //
 
         const member =
             await resolveModerationTarget(
@@ -150,30 +103,20 @@ export default {
             );
         }
 
-        // ============================================
-        // REMOVE TIMEOUT
-        // ============================================
-
-        await ModerationService.removeTimeoutUser({
-            guild:
-                interaction.guild,
-
-            member,
-
-            moderator:
-                interaction.member,
-        });
-
-        // ============================================
-        // SUCCESS
-        // ============================================
+        const result =
+            await ModerationService.removeTimeoutUser({
+                guild: interaction.guild,
+                member,
+                moderator: interaction.member,
+            });
 
         await InteractionHelper.safeEditReply(
             interaction,
             {
                 embeds: [
                     successEmbed(
-                        `🔓 **Removed timeout** from ${targetUser.tag}`
+                        `Removed Timeout From ${targetUser}`,
+                        `**User:** ${targetUser} (\`${targetUser.id}\`)\n**Action:** The user's timeout has been removed.\n**Case ID:** #${result?.caseId ?? 'N/A'}`,
                     ),
                 ],
             }
