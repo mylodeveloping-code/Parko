@@ -112,22 +112,88 @@ function withTraceContext(
 ) {
     return {
         traceId:
-            traceContext.traceId,
+            traceContext?.traceId,
 
         guildId:
             context.guildId ||
-            traceContext.guildId,
+            traceContext?.guildId,
 
         userId:
             context.userId ||
-            traceContext.userId,
+            traceContext?.userId,
 
         command:
             context.commandName ||
-            traceContext.command,
+            traceContext?.command,
 
         ...context,
     };
+}
+
+// ============================================================
+// SAFE INTERACTION ACKNOWLEDGEMENT
+// ============================================================
+
+async function acknowledgeInteraction(
+    interaction,
+) {
+    if (
+        !interaction ||
+        !interaction.isChatInputCommand()
+    ) {
+        return true;
+    }
+
+    if (
+        interaction.replied ||
+        interaction.deferred
+    ) {
+        return true;
+    }
+
+    try {
+        /*
+         * IMPORTANT:
+         *
+         * Do not use Ephemeral here.
+         *
+         * This is only the initial acknowledgement.
+         * Individual commands remain responsible for deciding
+         * whether their actual response should be ephemeral.
+         */
+
+        await interaction.deferReply();
+
+        logger.info(
+            `✅ Interaction acknowledged: /${interaction.commandName}`,
+        );
+
+        return true;
+    } catch (error) {
+        logger.error(
+            `❌ Failed to acknowledge /${interaction.commandName}:`,
+            {
+                error:
+                    error?.stack ||
+                    error?.message ||
+                    error,
+
+                code:
+                    error?.code,
+
+                interactionId:
+                    interaction.id,
+
+                guildId:
+                    interaction.guildId,
+
+                userId:
+                    interaction.user?.id,
+            },
+        );
+
+        return false;
+    }
 }
 
 // ============================================================
@@ -201,9 +267,48 @@ export default {
         interaction,
         client,
     ) {
-        // ========================================================
-        // TRACE CONTEXT
-        // ========================================================
+        /*
+         * ========================================================
+         * ABSOLUTE FIRST STEP FOR SLASH COMMANDS
+         * ========================================================
+         *
+         * Do this BEFORE ANY DATABASE, CONFIG, BLACKLIST,
+         * TRACE, PERMISSION, OR OTHER WORK.
+         *
+         * This is the part that prevents:
+         *
+         * "This application did not respond"
+         */
+
+        if (
+            interaction.isChatInputCommand()
+        ) {
+            const commandName =
+                String(
+                    interaction.commandName ||
+                        '',
+                ).toLowerCase();
+
+            logger.info(
+                `📥 InteractionCreate received /${commandName}`,
+            );
+
+            const acknowledged =
+                await acknowledgeInteraction(
+                    interaction,
+                );
+
+            if (!acknowledged) {
+                return;
+            }
+        }
+
+        /*
+         * --------------------------------------------------------
+         * Build trace context AFTER the interaction is
+         * acknowledged.
+         * --------------------------------------------------------
+         */
 
         let traceContext;
 
@@ -221,10 +326,13 @@ export default {
             traceContext = {
                 traceId:
                     interaction.id,
+
                 guildId:
                     interaction.guildId,
+
                 userId:
                     interaction.user?.id,
+
                 command:
                     interaction.commandName,
             };
@@ -236,72 +344,6 @@ export default {
         interaction.traceId =
             traceContext.traceId;
 
-        // ========================================================
-        // CRITICAL SLASH COMMAND ACKNOWLEDGEMENT
-        // ========================================================
-        //
-        // A slash command MUST be acknowledged within Discord's
-        // interaction timeout.
-        //
-        // This is intentionally done BEFORE:
-        //
-        // - blacklist checks
-        // - command lookup
-        // - trace wrapper execution
-        // - database access
-        // - permissions
-        // - cooldowns
-        // - abuse protection
-        //
-        // This prevents ANY shared middleware failure from causing
-        // "This application did not respond".
-        //
-
-        if (
-            interaction.isChatInputCommand() &&
-            !interaction.replied &&
-            !interaction.deferred
-        ) {
-            const commandName =
-                String(
-                    interaction.commandName ||
-                        '',
-                ).toLowerCase();
-
-            try {
-                await interaction.deferReply();
-
-                logger.info(
-                    `✅ Acknowledged /${commandName} immediately.`,
-                );
-            } catch (error) {
-                logger.error(
-                    `❌ Failed to acknowledge /${commandName}:`,
-                    {
-                        error:
-                            error?.stack ||
-                            error?.message ||
-                            error,
-
-                        interactionId:
-                            interaction.id,
-
-                        guildId:
-                            interaction.guildId,
-
-                        userId:
-                            interaction.user?.id,
-                    },
-                );
-
-                return;
-            }
-        }
-
-        // ========================================================
-        // MAIN INTERACTION HANDLER
-        // ========================================================
-
         return runWithTraceContext(
             traceContext,
             async () => {
@@ -310,48 +352,38 @@ export default {
                     // BLACKLIST
                     // ==================================================
 
-                    try {
+                    if (
+                        interaction.user &&
+                        isBlacklisted(
+                            interaction.user.id,
+                        )
+                    ) {
                         if (
-                            interaction.user &&
-                            isBlacklisted(
-                                interaction.user.id,
-                            )
+                            interaction.isChatInputCommand()
                         ) {
-                            if (
-                                interaction.isChatInputCommand()
-                            ) {
-                                logger.info(
-                                    `Blocked blacklisted user ${interaction.user.tag} (${interaction.user.id}) from using /${interaction.commandName}.`,
-                                );
+                            logger.info(
+                                `Blocked blacklisted user ${interaction.user.tag} (${interaction.user.id}) from using /${interaction.commandName}.`,
+                            );
 
-                                await respondToBlacklistedUser(
-                                    interaction,
-                                );
+                            await respondToBlacklistedUser(
+                                interaction,
+                            );
 
-                                return;
-                            }
-
-                            if (
-                                interaction.isAutocomplete() ||
-                                interaction.isButton() ||
-                                interaction.isStringSelectMenu() ||
-                                interaction.isModalSubmit()
-                            ) {
-                                await respondToBlacklistedUser(
-                                    interaction,
-                                );
-
-                                return;
-                            }
+                            return;
                         }
-                    } catch (error) {
-                        logger.error(
-                            'Blacklist check failed:',
-                            error,
-                        );
 
-                        // Do not allow a blacklist-system failure
-                        // to prevent a slash command from responding.
+                        if (
+                            interaction.isAutocomplete() ||
+                            interaction.isButton() ||
+                            interaction.isStringSelectMenu() ||
+                            interaction.isModalSubmit()
+                        ) {
+                            await respondToBlacklistedUser(
+                                interaction,
+                            );
+
+                            return;
+                        }
                     }
 
                     // ==================================================
@@ -367,50 +399,36 @@ export default {
                         interaction.user.id !==
                             BLACKLIST_OWNER_ID
                     ) {
-                        try {
-                            if (
-                                interaction.deferred &&
-                                !interaction.replied
-                            ) {
-                                await interaction.editReply({
-                                    embeds: [
-                                        {
-                                            title:
-                                                '⛔ Permission Denied',
+                        const denial = {
+                            embeds: [
+                                {
+                                    title:
+                                        '⛔ Permission Denied',
 
-                                            description:
-                                                'Only the bot developer can use the blacklist and unblacklist commands.',
+                                    description:
+                                        'Only the bot developer can use the blacklist and unblacklist commands.',
 
-                                            color: 0xff0000,
-                                        },
-                                    ],
-                                });
-                            } else if (
-                                !interaction.replied
-                            ) {
-                                await interaction.reply({
-                                    embeds: [
-                                        {
-                                            title:
-                                                '⛔ Permission Denied',
+                                    color: 0xff0000,
+                                },
+                            ],
+                        };
 
-                                            description:
-                                                'Only the bot developer can use the blacklist and unblacklist commands.',
-
-                                            color: 0xff0000,
-                                        },
-                                    ],
-
-                                    flags:
-                                        MessageFlags.Ephemeral,
-                                });
-                            }
-
-                        } catch (error) {
-                            logger.error(
-                                'Failed to send blacklist permission response:',
-                                error,
+                        if (
+                            interaction.deferred &&
+                            !interaction.replied
+                        ) {
+                            await interaction.editReply(
+                                denial,
                             );
+                        } else if (
+                            !interaction.replied
+                        ) {
+                            await interaction.reply({
+                                ...denial,
+
+                                flags:
+                                    MessageFlags.Ephemeral,
+                            });
                         }
 
                         return;
@@ -430,7 +448,7 @@ export default {
                             ).toLowerCase();
 
                         logger.info(
-                            `📥 Received slash command /${commandName} from ${interaction.user?.tag || interaction.user?.id}.`,
+                            `📥 Processing /${commandName}`,
                         );
 
                         // ==================================================
@@ -633,14 +651,20 @@ export default {
                                 withTraceContext(
                                     {
                                         commandName,
+
                                         subtype:
                                             'command_cooldown',
-                                        expected: true,
+
+                                        expected:
+                                            true,
+
                                         cooldownMs:
                                             abuseProtection.remainingMs,
+
                                         cooldownWindowMs:
                                             abuseProtection.policy
                                                 ?.windowMs,
+
                                         cooldownMaxAttempts:
                                             abuseProtection.policy
                                                 ?.maxAttempts,
@@ -689,6 +713,7 @@ export default {
                                         {
                                             commandName:
                                                 accessKey,
+
                                             guildId:
                                                 interaction.guild.id,
                                         },
@@ -750,6 +775,24 @@ export default {
                         logger.info(
                             `✅ Finished executing /${commandName}.`,
                         );
+
+                        /*
+                         * A command may complete without sending a
+                         * response. Since we already acknowledged the
+                         * interaction, make sure the user still sees
+                         * something instead of an indefinite-looking
+                         * interaction.
+                         */
+
+                        if (
+                            interaction.deferred &&
+                            !interaction.replied
+                        ) {
+                            await interaction.editReply({
+                                content:
+                                    '✅ Command completed successfully.',
+                            });
+                        }
 
                         return;
                     }
@@ -1024,6 +1067,13 @@ export default {
                         },
                     );
 
+                    /*
+                     * The interaction has already been acknowledged
+                     * for slash commands, so handleInteractionError()
+                     * must edit the existing response rather than
+                     * attempting a second initial reply.
+                     */
+
                     try {
                         await handleInteractionError(
                             interaction,
@@ -1058,13 +1108,10 @@ export default {
                         replyError
                     ) {
                         logger.error(
-                            'Failed to send fallback error response:',
+                            'Failed to send interaction error response:',
                             replyError,
                         );
 
-                        // Last-resort fallback for slash commands.
-                        // At this point the interaction should already
-                        // be deferred, so editReply is the correct API.
                         if (
                             interaction.isChatInputCommand() &&
                             interaction.deferred &&
@@ -1073,14 +1120,14 @@ export default {
                             try {
                                 await interaction.editReply({
                                     content:
-                                        '❌ An unexpected error occurred while processing this command.',
+                                        '❌ An error occurred while processing this command.',
                                 });
                             } catch (
-                                finalReplyError
+                                finalError
                             ) {
                                 logger.error(
-                                    'Final interaction fallback failed:',
-                                    finalReplyError,
+                                    '❌ Final interaction fallback failed:',
+                                    finalError,
                                 );
                             }
                         }
