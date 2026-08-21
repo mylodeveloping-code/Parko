@@ -163,7 +163,7 @@ async function resolvePrefixTarget(
     rawTarget
 ) {
     if (
-        !interaction.guild ||
+        !interaction?.guild ||
         !rawTarget
     ) {
         return null;
@@ -171,17 +171,25 @@ async function resolvePrefixTarget(
 
     const input = String(rawTarget).trim();
 
-    // Accept:
-    // <@123456789>
-    // <@!123456789>
-    // 123456789
+    /*
+     * Accept:
+     *
+     * <@123456789>
+     * <@!123456789>
+     * 123456789
+     *
+     * The ID is deliberately not restricted to a specific
+     * number of digits. Discord user IDs are snowflakes, and
+     * the important part here is that the entire argument is
+     * numeric.
+     */
 
     const mentionMatch = input.match(
-        /^<@!?(\d{17,20})>$/
+        /^<@!?(\d+)>$/
     );
 
     const idMatch = input.match(
-        /^(\d{17,20})$/
+        /^(\d+)$/
     );
 
     const userId =
@@ -189,11 +197,17 @@ async function resolvePrefixTarget(
         idMatch?.[1];
 
     if (!userId) {
+        logger.debug(
+            `Prefix timeout target "${input}" is not a valid Discord user ID or mention.`
+        );
+
         return null;
     }
 
     try {
-        // First try the cache.
+        /*
+         * First check the cache.
+         */
         const cachedMember =
             interaction.guild.members.cache.get(
                 userId
@@ -203,17 +217,23 @@ async function resolvePrefixTarget(
             return cachedMember;
         }
 
-        // Force a REST fetch of the guild member.
+        /*
+         * IMPORTANT:
+         *
+         * Fetch the guild member directly by ID.
+         *
+         * This allows raw Discord IDs to work even when
+         * the member is not currently cached.
+         */
         const member =
-            await interaction.guild.members.fetch({
-                user: userId,
-                force: true,
-            });
+            await interaction.guild.members.fetch(
+                userId
+            );
 
         return member || null;
     } catch (error) {
         logger.debug(
-            `Unable to resolve prefix timeout target ${userId} in guild ${interaction.guild.id}`,
+            `Unable to resolve prefix timeout target ${userId} in guild ${interaction.guild.id}.`,
             {
                 error,
             }
@@ -261,7 +281,6 @@ export default {
         .setDescription(
             'Timeout a user for a specific duration.'
         )
-
         .addUserOption((option) =>
             option
                 .setName('target')
@@ -270,7 +289,6 @@ export default {
                 )
                 .setRequired(true)
         )
-
         .addIntegerOption((option) =>
             option
                 .setName('duration')
@@ -282,7 +300,6 @@ export default {
                     ...durationChoices
                 )
         )
-
         .addStringOption((option) =>
             option
                 .setName('reason')
@@ -290,7 +307,6 @@ export default {
                     'Reason for the timeout'
                 )
         )
-
         .setDefaultMemberPermissions(
             PermissionFlagsBits.ModerateMembers
         ),
@@ -365,7 +381,9 @@ export default {
                 embeds: [
                     new EmbedBuilder()
                         .setColor(0xED4245)
-                        .setTitle('Invalid Timeout Duration')
+                        .setTitle(
+                            'Invalid Timeout Duration'
+                        )
                         .setDescription(
                             'Please provide a valid timeout duration.\n\n' +
                             '**Examples:** `10m`, `1h`, `6h`, `1d`, `1w`\n\n' +
@@ -476,6 +494,7 @@ export default {
                     reason,
                 }),
             ],
+
             allowedMentions: {
                 users: [
                     targetUser.id,
