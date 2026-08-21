@@ -1,24 +1,22 @@
-import {
-  EmbedBuilder,
-} from 'discord.js';
+import { EmbedBuilder } from 'discord.js';
 
 import {
-  logEvent as logAuditEvent,
-  EVENT_TYPES,
+    logEvent as logAuditEvent,
+    EVENT_TYPES,
 } from '../services/loggingService.js';
 
 import {
-  formatLogLine,
+    formatLogLine,
 } from './logging/logEmbeds.js';
 
 import {
-  logger,
+    logger,
 } from './logger.js';
 
 import {
-  getFromDb,
-  setInDb,
-  deleteFromDb,
+    getFromDb,
+    setInDb,
+    deleteFromDb,
 } from './database.js';
 
 // ============================================================
@@ -26,13 +24,13 @@ import {
 // ============================================================
 
 const MODERATION_EXEMPT_IDS = new Set([
-  '1171948174190067737', // You
+    '1171948174190067737', // You
 ]);
 
 export function isModerationExempt(userId) {
-  return MODERATION_EXEMPT_IDS.has(
-    String(userId)
-  );
+    return MODERATION_EXEMPT_IDS.has(
+        String(userId),
+    );
 }
 
 // ============================================================
@@ -49,40 +47,40 @@ export function isModerationExempt(userId) {
  * @returns {Promise<import('discord.js').GuildMember|null>}
  */
 export async function resolveModerationTarget(
-  guild,
-  userId
+    guild,
+    userId,
 ) {
-  if (!guild || !userId) {
-    return null;
-  }
+    if (!guild || !userId) {
+        return null;
+    }
 
-  const id =
-    String(userId).trim();
+    const id =
+        String(userId).trim();
 
-  if (!/^\d{17,20}$/.test(id)) {
-    return null;
-  }
+    if (!/^\d{17,20}$/.test(id)) {
+        return null;
+    }
 
-  const cachedMember =
-    guild.members.cache.get(id);
+    const cachedMember =
+        guild.members.cache.get(id);
 
-  if (cachedMember) {
-    return cachedMember;
-  }
+    if (cachedMember) {
+        return cachedMember;
+    }
 
-  try {
-    const member =
-      await guild.members.fetch(id);
+    try {
+        const member =
+            await guild.members.fetch(id);
 
-    return member || null;
-  } catch (error) {
-    logger.debug(
-      `Unable to resolve member ${id} in guild ${guild.id}:`,
-      error
-    );
+        return member || null;
+    } catch (error) {
+        logger.debug(
+            `Unable to resolve member ${id} in guild ${guild.id}:`,
+            error,
+        );
 
-    return null;
-  }
+        return null;
+    }
 }
 
 // ============================================================
@@ -100,30 +98,30 @@ export async function resolveModerationTarget(
  * @returns {Promise<import('discord.js').User|null>}
  */
 export async function resolveModerationUser(
-  client,
-  userId
+    client,
+    userId,
 ) {
-  if (!client || !userId) {
-    return null;
-  }
+    if (!client || !userId) {
+        return null;
+    }
 
-  const id =
-    String(userId).trim();
+    const id =
+        String(userId).trim();
 
-  if (!/^\d{17,20}$/.test(id)) {
-    return null;
-  }
+    if (!/^\d{17,20}$/.test(id)) {
+        return null;
+    }
 
-  try {
-    return await client.users.fetch(id);
-  } catch (error) {
-    logger.debug(
-      `Unable to resolve Discord user ${id}:`,
-      error
-    );
+    try {
+        return await client.users.fetch(id);
+    } catch (error) {
+        logger.debug(
+            `Unable to resolve Discord user ${id}:`,
+            error,
+        );
 
-    return null;
-  }
+        return null;
+    }
 }
 
 // ============================================================
@@ -138,45 +136,45 @@ export async function resolveModerationUser(
  * @param {string} userId
  */
 export async function resolveModerationTargetData(
-  client,
-  guild,
-  userId
+    client,
+    guild,
+    userId,
 ) {
-  const id =
-    String(userId ?? '').trim();
+    const id =
+        String(userId ?? '').trim();
 
-  if (!id) {
+    if (!id) {
+        return {
+            user: null,
+            member: null,
+            userId: null,
+            inGuild: false,
+        };
+    }
+
+    const member =
+        await resolveModerationTarget(
+            guild,
+            id,
+        );
+
+    let user =
+        member?.user ?? null;
+
+    if (!user) {
+        user =
+            await resolveModerationUser(
+                client,
+                id,
+            );
+    }
+
     return {
-      user: null,
-      member: null,
-      userId: null,
-      inGuild: false,
+        user,
+        member,
+        userId: id,
+        inGuild: Boolean(member),
     };
-  }
-
-  const member =
-    await resolveModerationTarget(
-      guild,
-      id
-    );
-
-  let user =
-    member?.user ?? null;
-
-  if (!user) {
-    user =
-      await resolveModerationUser(
-        client,
-        id
-      );
-  }
-
-  return {
-    user,
-    member,
-    userId: id,
-    inGuild: Boolean(member),
-  };
 }
 
 // ============================================================
@@ -184,55 +182,55 @@ export async function resolveModerationTargetData(
 // ============================================================
 
 export const MUTED_ROLE_ID =
-  '1537615321438093425';
+    '1537615321438093425';
 
 // ============================================================
 // TIMEOUT ROLE STORAGE
 // ============================================================
 
 export async function saveTimeoutRoles({
-  guildId,
-  userId,
-  roleIds,
-  expiresAt = null,
+    guildId,
+    userId,
+    roleIds,
+    expiresAt = null,
 }) {
-  try {
-    const key =
-      `moderation_timeout_roles_${guildId}_${userId}`;
+    try {
+        const key =
+            `moderation_timeout_roles_${guildId}_${userId}`;
 
-    const data = {
-      guildId,
-      userId,
-      roleIds:
-        Array.isArray(roleIds)
-          ? roleIds
-          : [],
-      mutedRoleId:
-        MUTED_ROLE_ID,
-      expiresAt,
-      savedAt:
-        new Date().toISOString(),
-    };
+        const data = {
+            guildId,
+            userId,
+            roleIds:
+                Array.isArray(roleIds)
+                    ? roleIds
+                    : [],
+            mutedRoleId:
+                MUTED_ROLE_ID,
+            expiresAt,
+            savedAt:
+                new Date().toISOString(),
+        };
 
-    await setInDb(
-      key,
-      data
-    );
+        await setInDb(
+            key,
+            data,
+        );
 
-    logger.debug(
-      `Saved timeout roles for ${userId} in guild ${guildId}: ` +
-      `${data.roleIds.join(', ')}`
-    );
+        logger.debug(
+            `Saved timeout roles for ${userId} in guild ${guildId}: ` +
+                `${data.roleIds.join(', ')}`,
+        );
 
-    return true;
-  } catch (error) {
-    logger.error(
-      `Error saving timeout roles for ${userId} in guild ${guildId}:`,
-      error
-    );
+        return true;
+    } catch (error) {
+        logger.error(
+            `Error saving timeout roles for ${userId} in guild ${guildId}:`,
+            error,
+        );
 
-    return false;
-  }
+        return false;
+    }
 }
 
 // ============================================================
@@ -240,35 +238,35 @@ export async function saveTimeoutRoles({
 // ============================================================
 
 export async function getTimeoutRoles(
-  guildId,
-  userId
+    guildId,
+    userId,
 ) {
-  try {
-    const key =
-      `moderation_timeout_roles_${guildId}_${userId}`;
+    try {
+        const key =
+            `moderation_timeout_roles_${guildId}_${userId}`;
 
-    const data =
-      await getFromDb(
-        key,
-        null
-      );
+        const data =
+            await getFromDb(
+                key,
+                null,
+            );
 
-    if (
-      !data ||
-      !Array.isArray(data.roleIds)
-    ) {
-      return null;
+        if (
+            !data ||
+            !Array.isArray(data.roleIds)
+        ) {
+            return null;
+        }
+
+        return data;
+    } catch (error) {
+        logger.error(
+            `Error getting timeout roles for ${userId} in guild ${guildId}:`,
+            error,
+        );
+
+        return null;
     }
-
-    return data;
-  } catch (error) {
-    logger.error(
-      `Error getting timeout roles for ${userId} in guild ${guildId}:`,
-      error
-    );
-
-    return null;
-  }
 }
 
 // ============================================================
@@ -276,28 +274,28 @@ export async function getTimeoutRoles(
 // ============================================================
 
 export async function deleteTimeoutRoles(
-  guildId,
-  userId
+    guildId,
+    userId,
 ) {
-  try {
-    const key =
-      `moderation_timeout_roles_${guildId}_${userId}`;
+    try {
+        const key =
+            `moderation_timeout_roles_${guildId}_${userId}`;
 
-    await deleteFromDb(key);
+        await deleteFromDb(key);
 
-    logger.debug(
-      `Deleted saved timeout roles for ${userId} in guild ${guildId}`
-    );
+        logger.debug(
+            `Deleted saved timeout roles for ${userId} in guild ${guildId}`,
+        );
 
-    return true;
-  } catch (error) {
-    logger.error(
-      `Error deleting timeout roles for ${userId} in guild ${guildId}:`,
-      error
-    );
+        return true;
+    } catch (error) {
+        logger.error(
+            `Error deleting timeout roles for ${userId} in guild ${guildId}:`,
+            error,
+        );
 
-    return false;
-  }
+        return false;
+    }
 }
 
 // ============================================================
@@ -310,18 +308,18 @@ export async function deleteTimeoutRoles(
  * @param {import('discord.js').GuildMember} member
  */
 export function getMemberRoleIds(member) {
-  if (!member?.roles?.cache) {
-    return [];
-  }
+    if (!member?.roles?.cache) {
+        return [];
+    }
 
-  return member.roles.cache
-    .filter(
-      role =>
-        role.id !== member.guild.id
-    )
-    .map(
-      role => role.id
-    );
+    return member.roles.cache
+        .filter(
+            role =>
+                role.id !== member.guild.id,
+        )
+        .map(
+            role => role.id,
+        );
 }
 
 // ============================================================
@@ -329,67 +327,67 @@ export function getMemberRoleIds(member) {
 // ============================================================
 
 export async function applyMutedRole(member) {
-  if (!member) {
-    return false;
-  }
-
-  const mutedRole =
-    member.guild.roles.cache.get(
-      MUTED_ROLE_ID
-    );
-
-  if (!mutedRole) {
-    logger.error(
-      `Muted role ${MUTED_ROLE_ID} was not found in guild ${member.guild.id}`
-    );
-
-    return false;
-  }
-
-  if (!mutedRole.editable) {
-    logger.error(
-      `Muted role ${MUTED_ROLE_ID} is not editable in guild ${member.guild.id}`
-    );
-
-    return false;
-  }
-
-  try {
-    const rolesToRemove =
-      member.roles.cache.filter(
-        role =>
-          role.id !== member.guild.id &&
-          role.id !== MUTED_ROLE_ID &&
-          !role.managed
-      );
-
-    if (rolesToRemove.size > 0) {
-      await member.roles.remove(
-        rolesToRemove,
-        'Applying Muted role'
-      );
+    if (!member) {
+        return false;
     }
 
-    if (
-      !member.roles.cache.has(
-        MUTED_ROLE_ID
-      )
-    ) {
-      await member.roles.add(
-        mutedRole,
-        'Applying Muted role'
-      );
+    const mutedRole =
+        member.guild.roles.cache.get(
+            MUTED_ROLE_ID,
+        );
+
+    if (!mutedRole) {
+        logger.error(
+            `Muted role ${MUTED_ROLE_ID} was not found in guild ${member.guild.id}`,
+        );
+
+        return false;
     }
 
-    return true;
-  } catch (error) {
-    logger.error(
-      `Error applying Muted role to ${member.user?.tag ?? member.id}:`,
-      error
-    );
+    if (!mutedRole.editable) {
+        logger.error(
+            `Muted role ${MUTED_ROLE_ID} is not editable in guild ${member.guild.id}`,
+        );
 
-    return false;
-  }
+        return false;
+    }
+
+    try {
+        const rolesToRemove =
+            member.roles.cache.filter(
+                role =>
+                    role.id !== member.guild.id &&
+                    role.id !== MUTED_ROLE_ID &&
+                    !role.managed,
+            );
+
+        if (rolesToRemove.size > 0) {
+            await member.roles.remove(
+                rolesToRemove,
+                'Applying Muted role',
+            );
+        }
+
+        if (
+            !member.roles.cache.has(
+                MUTED_ROLE_ID,
+            )
+        ) {
+            await member.roles.add(
+                mutedRole,
+                'Applying Muted role',
+            );
+        }
+
+        return true;
+    } catch (error) {
+        logger.error(
+            `Error applying Muted role to ${member.user?.tag ?? member.id}:`,
+            error,
+        );
+
+        return false;
+    }
 }
 
 // ============================================================
@@ -397,92 +395,92 @@ export async function applyMutedRole(member) {
 // ============================================================
 
 export async function restoreTimeoutRoles(member) {
-  if (!member) {
-    return false;
-  }
-
-  try {
-    const saved =
-      await getTimeoutRoles(
-        member.guild.id,
-        member.id
-      );
-
-    if (!saved) {
-      logger.debug(
-        `No saved timeout roles found for ${member.id} in guild ${member.guild.id}`
-      );
-
-      if (
-        member.roles.cache.has(
-          MUTED_ROLE_ID
-        )
-      ) {
-        await member.roles.remove(
-          MUTED_ROLE_ID,
-          'Restoring roles after timeout'
-        );
-      }
-
-      return false;
+    if (!member) {
+        return false;
     }
 
-    const rolesToRestore =
-      saved.roleIds.filter(
-        roleId => {
-          const role =
-            member.guild.roles.cache.get(
-              roleId
+    try {
+        const saved =
+            await getTimeoutRoles(
+                member.guild.id,
+                member.id,
             );
 
-          return (
-            role &&
-            !role.managed &&
-            role.id !== member.guild.id &&
-            role.id !== MUTED_ROLE_ID
-          );
+        if (!saved) {
+            logger.debug(
+                `No saved timeout roles found for ${member.id} in guild ${member.guild.id}`,
+            );
+
+            if (
+                member.roles.cache.has(
+                    MUTED_ROLE_ID,
+                )
+            ) {
+                await member.roles.remove(
+                    MUTED_ROLE_ID,
+                    'Restoring roles after timeout',
+                );
+            }
+
+            return false;
         }
-      );
 
-    if (
-      member.roles.cache.has(
-        MUTED_ROLE_ID
-      )
-    ) {
-      await member.roles.remove(
-        MUTED_ROLE_ID,
-        'Restoring roles after timeout'
-      );
+        const rolesToRestore =
+            saved.roleIds.filter(
+                roleId => {
+                    const role =
+                        member.guild.roles.cache.get(
+                            roleId,
+                        );
+
+                    return (
+                        role &&
+                        !role.managed &&
+                        role.id !== member.guild.id &&
+                        role.id !== MUTED_ROLE_ID
+                    );
+                },
+            );
+
+        if (
+            member.roles.cache.has(
+                MUTED_ROLE_ID,
+            )
+        ) {
+            await member.roles.remove(
+                MUTED_ROLE_ID,
+                'Restoring roles after timeout',
+            );
+        }
+
+        if (
+            rolesToRestore.length > 0
+        ) {
+            await member.roles.add(
+                rolesToRestore,
+                'Restoring roles after timeout',
+            );
+        }
+
+        await deleteTimeoutRoles(
+            member.guild.id,
+            member.id,
+        );
+
+        logger.info(
+            `Restored ${rolesToRestore.length} roles for ` +
+                `${member.user?.tag ?? member.id} in ${member.guild.name}`,
+        );
+
+        return true;
+    } catch (error) {
+        logger.error(
+            `Error restoring timeout roles for ${member.user?.tag ?? member.id}:`,
+            error,
+        );
+
+        return false;
     }
-
-    if (
-      rolesToRestore.length > 0
-    ) {
-      await member.roles.add(
-        rolesToRestore,
-        'Restoring roles after timeout'
-      );
-    }
-
-    await deleteTimeoutRoles(
-      member.guild.id,
-      member.id
-    );
-
-    logger.info(
-      `Restored ${rolesToRestore.length} roles for ` +
-      `${member.user?.tag ?? member.id} in ${member.guild.name}`
-    );
-
-    return true;
-  } catch (error) {
-    logger.error(
-      `Error restoring timeout roles for ${member.user?.tag ?? member.id}:`,
-      error
-    );
-
-    return false;
-  }
 }
 
 // ============================================================
@@ -490,131 +488,113 @@ export async function restoreTimeoutRoles(member) {
 // ============================================================
 
 const MODERATION_NOTIFICATION_TEXT = {
-  'Member Banned':
-    'has been banned',
+    'Member Banned':
+        'has been banned',
 
-  'Member Kicked':
-    'has been kicked',
+    'Member Kicked':
+        'has been kicked',
 
-  'Member Timed Out':
-    'has been timed out',
+    'Member Timed Out':
+        'has been muted',
 
-  'Member Untimeouted':
-    'has had their timeout removed',
+    'Member Untimeouted':
+        'has had their timeout removed',
 
-  'Member Unbanned':
-    'has been unbanned',
+    'Member Unbanned':
+        'has been unbanned',
 
-  'User Warned':
-    'has been warned',
+    'User Warned':
+        'has been warned',
 
-  'Warnings Viewed':
-    'had their warnings viewed',
+    'Warnings Viewed':
+        'had their warnings viewed',
 
-  'Messages Purged':
-    'had messages purged',
+    'Messages Purged':
+        'had messages purged',
 
-  'Channel Locked':
-    'has had their channel locked',
+    'Channel Locked':
+        'has had their channel locked',
 
-  'Channel Unlocked':
-    'has had their channel unlocked',
+    'Channel Unlocked':
+        'has had their channel unlocked',
 
-  'Temporary Ban Expired':
-    'has been automatically unbanned',
+    'Temporary Ban Expired':
+        'has been automatically unbanned',
 };
 
 // ============================================================
 // RESOLVE MODERATION NOTIFICATION CHANNEL
 // ============================================================
 
-/**
- * Resolve the channel where a moderation notification should
- * be sent.
- *
- * Priority:
- *
- * 1. event.channel
- * 2. event.metadata.channelId
- * 3. event.channelId
- * 4. guild.systemChannel
- *
- * This allows commands to explicitly tell the moderation
- * system which channel they originated from.
- *
- * The system channel remains as a safe fallback for
- * moderation actions that do not provide an originating
- * channel.
- */
 async function resolveModerationNotificationChannel({
-  guild,
-  event,
+    guild,
+    event,
 }) {
-  if (!guild || !event) {
-    return null;
-  }
-
-  // ==========================================================
-  // DIRECT CHANNEL OBJECT
-  // ==========================================================
-
-  if (
-    event.channel &&
-    typeof event.channel.send === 'function'
-  ) {
-    return event.channel;
-  }
-
-  // ==========================================================
-  // CHANNEL ID
-  // ==========================================================
-
-  const channelId =
-    event.metadata?.channelId ||
-    event.channelId ||
-    null;
-
-  if (channelId) {
-    try {
-      const channel =
-        guild.channels.cache.get(
-          String(channelId)
-        ) ||
-        await guild.channels.fetch(
-          String(channelId)
-        ).catch(() => null);
-
-      if (
-        channel &&
-        channel.isTextBased?.() &&
-        typeof channel.send === 'function'
-      ) {
-        return channel;
-      }
-    } catch (error) {
-      logger.debug(
-        `Unable to resolve moderation notification channel ${channelId}:`,
-        error
-      );
+    if (!guild || !event) {
+        return null;
     }
-  }
 
-  // ==========================================================
-  // SYSTEM CHANNEL FALLBACK
-  // ==========================================================
+    // ==========================================================
+    // DIRECT CHANNEL OBJECT
+    // ==========================================================
 
-  const systemChannel =
-    guild.systemChannel;
+    if (
+        event.channel &&
+        typeof event.channel.send === 'function'
+    ) {
+        return event.channel;
+    }
 
-  if (
-    systemChannel &&
-    systemChannel.isTextBased?.() &&
-    typeof systemChannel.send === 'function'
-  ) {
-    return systemChannel;
-  }
+    // ==========================================================
+    // CHANNEL ID
+    // ==========================================================
 
-  return null;
+    const channelId =
+        event.metadata?.channelId ||
+        event.channelId ||
+        null;
+
+    if (channelId) {
+        try {
+            const channel =
+                guild.channels.cache.get(
+                    String(channelId),
+                ) ||
+                await guild.channels.fetch(
+                    String(channelId),
+                ).catch(() => null);
+
+            if (
+                channel &&
+                channel.isTextBased?.() &&
+                typeof channel.send === 'function'
+            ) {
+                return channel;
+            }
+        } catch (error) {
+            logger.debug(
+                `Unable to resolve moderation notification channel ${channelId}:`,
+                error,
+            );
+        }
+    }
+
+    // ==========================================================
+    // SYSTEM CHANNEL FALLBACK
+    // ==========================================================
+
+    const systemChannel =
+        guild.systemChannel;
+
+    if (
+        systemChannel &&
+        systemChannel.isTextBased?.() &&
+        typeof systemChannel.send === 'function'
+    ) {
+        return systemChannel;
+    }
+
+    return null;
 }
 
 // ============================================================
@@ -622,107 +602,99 @@ async function resolveModerationNotificationChannel({
 // ============================================================
 
 export async function sendModerationNotification({
-  guild,
-  event,
+    guild,
+    channel = null,
+    event,
 }) {
-  try {
-    if (!guild || !event) {
-      return false;
-    }
+    try {
+        if (!guild || !event) {
+            return false;
+        }
 
-    const userId =
-      event.metadata?.userId ||
-      event.targetUserId;
+        const userId =
+            event.metadata?.userId ||
+            event.targetUserId;
 
-    if (!userId) {
-      logger.warn(
-        `Cannot send moderation notification for ${event.action}: ` +
-        `no target user ID was provided.`
-      );
+        if (!userId) {
+            logger.debug(
+                `Skipping public moderation notification for ${event.action}: no target user ID.`,
+            );
 
-      return false;
-    }
+            return false;
+        }
 
-    if (
-      isModerationExempt(userId)
-    ) {
-      return false;
-    }
+        if (
+            isModerationExempt(
+                userId,
+            )
+        ) {
+            return false;
+        }
 
-    const actionText =
-      MODERATION_NOTIFICATION_TEXT[
-        event.action
-      ];
+        const actionText =
+            MODERATION_NOTIFICATION_TEXT[
+                event.action
+            ];
 
-    if (!actionText) {
-      return false;
-    }
+        if (!actionText) {
+            return false;
+        }
 
-    const channel =
-      await resolveModerationNotificationChannel({
-        guild,
-        event,
-      });
+        const resolvedChannel =
+            channel ||
+            await resolveModerationNotificationChannel({
+                guild,
+                event,
+            });
 
-    if (!channel) {
-      logger.warn(
-        `Cannot send moderation notification in ${guild.name}: ` +
-        `no usable notification channel was found.`
-      );
+        if (!resolvedChannel) {
+            logger.warn(
+                `Cannot send moderation notification in ${guild.name}: no usable notification channel was found.`,
+            );
 
-      return false;
-    }
+            return false;
+        }
 
-    const userMention =
-      `<@${userId}>`;
+        const userMention =
+            `<@${String(userId)}>`;
 
-    const embed =
-      new EmbedBuilder()
-        .setColor(0xED4245)
-        .setDescription(
-          `${userMention} **${actionText}** | ${userId}`
+        /*
+         * IMPORTANT:
+         * This is intentionally a plain message instead of
+         * an embed. This is the standardized public format
+         * for moderation actions.
+         *
+         * Example:
+         * @astro has been warned. | 1423028927881805874
+         */
+
+        const content =
+            `${userMention} ${actionText}. | ${String(userId)}`;
+
+        await resolvedChannel.send({
+            content,
+            allowedMentions: {
+                users: [
+                    String(userId),
+                ],
+            },
+        });
+
+        logger.info(
+            `Moderation notification sent: ` +
+                `${event.action} for ${userId} in ${guild.name} ` +
+                `(channel ${resolvedChannel.id})`,
         );
 
-    if (
-      event.duration &&
-      event.action ===
-        'Member Timed Out'
-    ) {
-      embed.addFields({
-        name: 'Duration',
-        value:
-          String(event.duration),
-        inline: true,
-      });
+        return true;
+    } catch (error) {
+        logger.error(
+            `Error sending moderation notification for ${event?.action ?? 'unknown action'}:`,
+            error,
+        );
+
+        return false;
     }
-
-    await channel.send({
-      embeds: [
-        embed,
-      ],
-
-      allowedMentions: {
-        users: [
-          String(userId),
-        ],
-      },
-    });
-
-    logger.info(
-      `Moderation notification sent: ` +
-      `${event.action} for ${userId} in ${guild.name} ` +
-      `(channel ${channel.id})`
-    );
-
-    return true;
-  } catch (error) {
-    logger.error(
-      `Error sending moderation notification for ${event?.action ?? 'unknown action'}:`,
-      error
-    );
-
-    return false;
-  }
 }
 
 // ============================================================
@@ -730,53 +702,53 @@ export async function sendModerationNotification({
 // ============================================================
 
 const ACTION_TO_EVENT_TYPE = {
-  'Member Banned':
-    EVENT_TYPES.MODERATION_BAN,
+    'Member Banned':
+        EVENT_TYPES.MODERATION_BAN,
 
-  'Member Kicked':
-    EVENT_TYPES.MODERATION_KICK,
+    'Member Kicked':
+        EVENT_TYPES.MODERATION_KICK,
 
-  'Member Timed Out':
-    EVENT_TYPES.MODERATION_TIMEOUT,
+    'Member Timed Out':
+        EVENT_TYPES.MODERATION_TIMEOUT,
 
-  'Member Untimeouted':
-    EVENT_TYPES.MODERATION_UNTIMEOUT,
+    'Member Untimeouted':
+        EVENT_TYPES.MODERATION_UNTIMEOUT,
 
-  'Member Unbanned':
-    EVENT_TYPES.MODERATION_UNBAN,
+    'Member Unbanned':
+        EVENT_TYPES.MODERATION_UNBAN,
 
-  'User Warned':
-    EVENT_TYPES.MODERATION_WARN,
+    'User Warned':
+        EVENT_TYPES.MODERATION_WARN,
 
-  'Warnings Viewed':
-    EVENT_TYPES.MODERATION_WARN,
+    'Warnings Viewed':
+        EVENT_TYPES.MODERATION_WARN,
 
-  'Messages Purged':
-    EVENT_TYPES.MODERATION_PURGE,
+    'Messages Purged':
+        EVENT_TYPES.MODERATION_PURGE,
 
-  'Channel Locked':
-    EVENT_TYPES.MODERATION_LOCK,
+    'Channel Locked':
+        EVENT_TYPES.MODERATION_LOCK,
 
-  'Channel Unlocked':
-    EVENT_TYPES.MODERATION_UNLOCK,
+    'Channel Unlocked':
+        EVENT_TYPES.MODERATION_UNLOCK,
 
-  'DM Sent':
-    EVENT_TYPES.MODERATION_DM,
+    'DM Sent':
+        EVENT_TYPES.MODERATION_DM,
 
-  'Bot Message Sent':
-    EVENT_TYPES.MODERATION_CONFIG,
+    'Bot Message Sent':
+        EVENT_TYPES.MODERATION_CONFIG,
 
-  'Log Channel Activated':
-    EVENT_TYPES.MODERATION_CONFIG,
+    'Log Channel Activated':
+        EVENT_TYPES.MODERATION_CONFIG,
 
-  'Log Filter Updated':
-    EVENT_TYPES.MODERATION_CONFIG,
+    'Log Filter Updated':
+        EVENT_TYPES.MODERATION_CONFIG,
 
-  'Case Created':
-    EVENT_TYPES.MODERATION_CONFIG,
+    'Case Created':
+        EVENT_TYPES.MODERATION_CONFIG,
 
-  'Case Updated':
-    EVENT_TYPES.MODERATION_CONFIG,
+    'Case Updated':
+        EVENT_TYPES.MODERATION_CONFIG,
 };
 
 // ============================================================
@@ -784,124 +756,123 @@ const ACTION_TO_EVENT_TYPE = {
 // ============================================================
 
 function buildModerationLogData(event) {
-  const targetIdMatch =
-    event.target?.match(
-      /\((\d+)\)/
-    );
+    const targetIdMatch =
+        event.target?.match(
+            /\((\d+)\)/,
+        );
 
-  const targetId =
-    targetIdMatch?.[1];
+    const targetId =
+        targetIdMatch?.[1];
 
-  const executorIdMatch =
-    event.executor?.match(
-      /\((\d+)\)/
-    );
+    const executorIdMatch =
+        event.executor?.match(
+            /\((\d+)\)/,
+        );
 
-  const executorTag =
-    event.executor?.split(
-      ' ('
-    )[0] ||
-    'Moderator';
+    const executorTag =
+        event.executor?.split(
+            ' (',
+        )[0] ||
+        'Moderator';
 
-  const lines = [];
+    const lines = [];
 
-  if (event.target) {
-    lines.push(
-      formatLogLine(
-        'User',
-        event.target
-      )
-    );
-  }
+    if (event.target) {
+        lines.push(
+            formatLogLine(
+                'User',
+                event.target,
+            ),
+        );
+    }
 
-  if (event.reason) {
-    const reason =
-      event.reason.length > 900
-        ? `${event.reason.substring(0, 897)}...`
-        : event.reason;
+    if (event.reason) {
+        const reason =
+            event.reason.length > 900
+                ? `${event.reason.substring(
+                      0,
+                      897,
+                  )}...`
+                : event.reason;
 
-    lines.push(
-      formatLogLine(
-        'Reason',
-        reason
-      )
-    );
-  }
+        lines.push(
+            formatLogLine(
+                'Reason',
+                reason,
+            ),
+        );
+    }
 
-  if (event.duration) {
-    lines.push(
-      formatLogLine(
-        'Duration',
-        event.duration
-      )
-    );
-  }
+    if (event.duration) {
+        lines.push(
+            formatLogLine(
+                'Duration',
+                event.duration,
+            ),
+        );
+    }
 
-  if (event.caseId) {
-    lines.push(
-      formatLogLine(
-        'Case',
-        `\`${event.caseId}\``
-      )
-    );
-  }
+    if (event.caseId) {
+        lines.push(
+            formatLogLine(
+                'Case',
+                `\`${event.caseId}\``,
+            ),
+        );
+    }
 
-  const meta = [];
+    const meta = [];
 
-  if (event.metadata) {
-    Object.entries(
-      event.metadata
-    ).forEach(
-      ([key, value]) => {
-        if (
-          value !== undefined &&
-          value !== null &&
-          key !== 'userId' &&
-          key !== 'moderatorId'
-        ) {
-          meta.push([
-            key.charAt(0).toUpperCase() +
-              key.slice(1),
+    if (event.metadata) {
+        Object.entries(
+            event.metadata,
+        ).forEach(
+            ([key, value]) => {
+                if (
+                    value !== undefined &&
+                    value !== null &&
+                    key !== 'userId' &&
+                    key !== 'moderatorId'
+                ) {
+                    meta.push([
+                        key.charAt(0).toUpperCase() +
+                            key.slice(1),
+                        String(value),
+                    ]);
+                }
+            },
+        );
+    }
 
-            String(value),
-          ]);
-        }
-      }
-    );
-  }
+    const title =
+        event.caseId
+            ? `${event.action} · Case #${event.caseId}`
+            : event.action;
 
-  const title =
-    event.caseId
-      ? `${event.action} · Case #${event.caseId}`
-      : event.action;
-
-  return {
-    title,
-
-    lines,
-
-    meta,
-
-    userId:
-      event.metadata?.userId ||
-      targetId ||
-      undefined,
-
-    thumbnail:
-      targetId
-        ? `https://cdn.discordapp.com/embed/avatars/${Number(targetId) % 5}.png`
-        : undefined,
-
-    footer:
-      executorIdMatch
-        ? {
-            text:
-              executorTag,
-            iconURL:
-              undefined,
-          }
-        : undefined,
-  };
+    return {
+        title,
+        lines,
+        meta,
+        userId:
+            event.metadata?.userId ||
+            targetId ||
+            undefined,
+        thumbnail:
+            targetId
+                ? `https://cdn.discordapp.com/embed/avatars/${Number(
+                      targetId,
+                  ) % 5}.png`
+                : undefined,
+        footer:
+            executorIdMatch
+                ? {
+                      text:
+                          executorTag,
+                      iconURL:
+                          undefined,
+                  }
+                : undefined,
+    };
 }
 
 // ============================================================
@@ -909,60 +880,60 @@ function buildModerationLogData(event) {
 // ============================================================
 
 export async function logEvent({
-  client,
-  guild,
-  guildId,
-  event,
+    client,
+    guild,
+    guildId,
+    event,
 }) {
-  try {
-    if (!guild && guildId) {
-      guild =
-        client.guilds.cache.get(
-          guildId
-        ) ||
-        await client.guilds
-          .fetch(guildId)
-          .catch(() => null);
+    try {
+        if (!guild && guildId) {
+            guild =
+                client.guilds.cache.get(
+                    guildId,
+                ) ||
+                await client.guilds
+                    .fetch(guildId)
+                    .catch(() => null);
+        }
+
+        if (!guild) {
+            logger.warn(
+                'logEvent invoked without valid guild or guildId',
+            );
+
+            return;
+        }
+
+        const eventType =
+            ACTION_TO_EVENT_TYPE[
+                event.action
+            ] ||
+            EVENT_TYPES.MODERATION_CONFIG;
+
+        const data =
+            buildModerationLogData(
+                event,
+            );
+
+        await logAuditEvent({
+            client,
+            guildId:
+                guild.id,
+            eventType,
+            data,
+        });
+
+        logger.info(
+            `Moderation action logged: ` +
+                `${event.action} by ${event.executor} ` +
+                `on ${event.target} in guild ${guild.id}`,
+        );
+    } catch (error) {
+        logger.error(
+            'Error logging moderation event:',
+            error,
+        );
     }
-
-    if (!guild) {
-      logger.warn(
-        'logEvent invoked without valid guild or guildId'
-      );
-
-      return;
-    }
-
-    const eventType =
-      ACTION_TO_EVENT_TYPE[
-        event.action
-      ] ||
-      EVENT_TYPES.MODERATION_CONFIG;
-
-    const data =
-      buildModerationLogData(
-        event
-      );
-
-    await logAuditEvent({
-      client,
-      guildId:
-        guild.id,
-      eventType,
-      data,
-    });
-
-    logger.info(
-      `Moderation action logged: ` +
-      `${event.action} by ${event.executor} ` +
-      `on ${event.target} in guild ${guild.id}`
-    );
-  } catch (error) {
-    logger.error(
-      'Error logging moderation event:',
-      error
-    );
-  }
 }
 
 // ============================================================
@@ -970,36 +941,36 @@ export async function logEvent({
 // ============================================================
 
 export async function generateCaseId(
-  client,
-  guildId
+    client,
+    guildId,
 ) {
-  try {
-    const caseKey =
-      `moderation_cases_${guildId}`;
+    try {
+        const caseKey =
+            `moderation_cases_${guildId}`;
 
-    const currentCase =
-      await getFromDb(
-        caseKey,
-        0
-      );
+        const currentCase =
+            await getFromDb(
+                caseKey,
+                0,
+            );
 
-    const nextCase =
-      currentCase + 1;
+        const nextCase =
+            currentCase + 1;
 
-    await setInDb(
-      caseKey,
-      nextCase
-    );
+        await setInDb(
+            caseKey,
+            nextCase,
+        );
 
-    return nextCase;
-  } catch (error) {
-    logger.error(
-      'Error generating case ID:',
-      error
-    );
+        return nextCase;
+    } catch (error) {
+        logger.error(
+            'Error generating case ID:',
+            error,
+        );
 
-    return Date.now();
-  }
+        return Date.now();
+    }
 }
 
 // ============================================================
@@ -1007,64 +978,62 @@ export async function generateCaseId(
 // ============================================================
 
 export async function storeModerationCase({
-  guildId,
-  caseId,
-  caseData,
+    guildId,
+    caseId,
+    caseData,
 }) {
-  try {
-    const caseKey =
-      `moderation_case_${guildId}_${caseId}`;
+    try {
+        const caseKey =
+            `moderation_case_${guildId}_${caseId}`;
 
-    const caseDataWithTimestamp = {
-      ...caseData,
+        const caseDataWithTimestamp = {
+            ...caseData,
+            createdAt:
+                new Date().toISOString(),
+            caseId,
+        };
 
-      createdAt:
-        new Date().toISOString(),
+        await setInDb(
+            caseKey,
+            caseDataWithTimestamp,
+        );
 
-      caseId,
-    };
+        const caseListKey =
+            `moderation_cases_list_${guildId}`;
 
-    await setInDb(
-      caseKey,
-      caseDataWithTimestamp
-    );
+        const caseList =
+            await getFromDb(
+                caseListKey,
+                [],
+            );
 
-    const caseListKey =
-      `moderation_cases_list_${guildId}`;
+        caseList.push(
+            caseDataWithTimestamp,
+        );
 
-    const caseList =
-      await getFromDb(
-        caseListKey,
-        []
-      );
+        if (
+            caseList.length > 1000
+        ) {
+            caseList.splice(
+                0,
+                caseList.length - 1000,
+            );
+        }
 
-    caseList.push(
-      caseDataWithTimestamp
-    );
+        await setInDb(
+            caseListKey,
+            caseList,
+        );
 
-    if (
-      caseList.length > 1000
-    ) {
-      caseList.splice(
-        0,
-        caseList.length - 1000
-      );
+        return true;
+    } catch (error) {
+        logger.error(
+            'Error storing moderation case:',
+            error,
+        );
+
+        return false;
     }
-
-    await setInDb(
-      caseListKey,
-      caseList
-    );
-
-    return true;
-  } catch (error) {
-    logger.error(
-      'Error storing moderation case:',
-      error
-    );
-
-    return false;
-  }
 }
 
 // ============================================================
@@ -1072,83 +1041,85 @@ export async function storeModerationCase({
 // ============================================================
 
 export async function getModerationCases(
-  guildId,
-  filters = {}
+    guildId,
+    filters = {},
 ) {
-  try {
-    const {
-      userId,
-      moderatorId,
-      action,
-      limit = 50,
-      offset = 0,
-    } = filters;
+    try {
+        const {
+            userId,
+            moderatorId,
+            action,
+            limit = 50,
+            offset = 0,
+        } = filters;
 
-    const caseListKey =
-      `moderation_cases_list_${guildId}`;
+        const caseListKey =
+            `moderation_cases_list_${guildId}`;
 
-    const caseList =
-      await getFromDb(
-        caseListKey,
-        []
-      );
+        const caseList =
+            await getFromDb(
+                caseListKey,
+                [],
+            );
 
-    let filteredCases =
-      caseList;
+        let filteredCases =
+            caseList;
 
-    if (userId) {
-      const normalizedUserId =
-        String(userId);
+        if (userId) {
+            const normalizedUserId =
+                String(userId);
 
-      filteredCases =
-        filteredCases.filter(
-          case_ =>
-            String(
-              case_.targetUserId
-            ) === normalizedUserId
+            filteredCases =
+                filteredCases.filter(
+                    case_ =>
+                        String(
+                            case_.targetUserId,
+                        ) ===
+                        normalizedUserId,
+                );
+        }
+
+        if (moderatorId) {
+            const normalizedModeratorId =
+                String(moderatorId);
+
+            filteredCases =
+                filteredCases.filter(
+                    case_ =>
+                        String(
+                            case_.moderatorId,
+                        ) ===
+                        normalizedModeratorId,
+                );
+        }
+
+        if (action) {
+            filteredCases =
+                filteredCases.filter(
+                    case_ =>
+                        case_.action ===
+                        action,
+                );
+        }
+
+        filteredCases.sort(
+            (a, b) =>
+                new Date(b.createdAt) -
+                new Date(a.createdAt),
         );
-    }
 
-    if (moderatorId) {
-      const normalizedModeratorId =
-        String(moderatorId);
-
-      filteredCases =
-        filteredCases.filter(
-          case_ =>
-            String(
-              case_.moderatorId
-            ) === normalizedModeratorId
+        return filteredCases.slice(
+            offset,
+            offset + limit,
         );
-    }
-
-    if (action) {
-      filteredCases =
-        filteredCases.filter(
-          case_ =>
-            case_.action ===
-            action
+    } catch (error) {
+        logger.error(
+            'Error getting moderation cases:',
+            error,
         );
+
+        return [];
     }
-
-    filteredCases.sort(
-      (a, b) =>
-        new Date(b.createdAt) -
-        new Date(a.createdAt)
-    );
-
-    return filteredCases.slice(
-      offset,
-      offset + limit
-    );
-  } catch (error) {
-    logger.error(
-      'Error getting moderation cases:',
-      error
-    );
-
-    return [];
-  }
 }
 
 // ============================================================
@@ -1156,153 +1127,185 @@ export async function getModerationCases(
 // ============================================================
 
 export async function logModerationAction({
-  client,
-  guild,
-  event,
-}) {
-  if (!guild || !event) {
-    return null;
-  }
-
-  const targetUserId =
-    event.metadata?.userId ||
-    event.targetUserId;
-
-  const normalizedTargetUserId =
-    targetUserId
-      ? String(targetUserId)
-      : null;
-
-  // ==========================================================
-  // EXEMPTION
-  // ==========================================================
-
-  if (
-    normalizedTargetUserId &&
-    isModerationExempt(
-      normalizedTargetUserId
-    )
-  ) {
-    logger.info(
-      `Moderation action ignored for exempt user ` +
-      `${normalizedTargetUserId} in guild ${guild.id}`
-    );
-
-    return null;
-  }
-
-  // ==========================================================
-  // CREATE CASE ID
-  // ==========================================================
-
-  const caseId =
-    await generateCaseId(
-      client,
-      guild.id
-    );
-
-  // ==========================================================
-  // NORMALIZED EVENT
-  // ==========================================================
-
-  const normalizedEvent = {
-    ...event,
-
-    metadata: {
-      ...(event.metadata || {}),
-
-      ...(normalizedTargetUserId
-        ? {
-            userId:
-              normalizedTargetUserId,
-          }
-        : {}),
-
-      // Preserve the originating channel when supplied.
-      ...(event.channel?.id
-        ? {
-            channelId:
-              String(event.channel.id),
-          }
-        : {}),
-    },
-
-    targetUserId:
-      normalizedTargetUserId,
-
-    caseId,
-  };
-
-  // ==========================================================
-  // STORE CASE
-  // ==========================================================
-
-  await storeModerationCase({
-    guildId:
-      guild.id,
-
-    caseId,
-
-    caseData: {
-      action:
-        event.action,
-
-      target:
-        event.target,
-
-      executor:
-        event.executor,
-
-      reason:
-        event.reason,
-
-      duration:
-        event.duration,
-
-      metadata:
-        normalizedEvent.metadata,
-
-      targetUserId:
-        normalizedTargetUserId,
-
-      moderatorId:
-        event.metadata?.moderatorId
-          ? String(
-              event.metadata.moderatorId
-            )
-          : undefined,
-
-      channelId:
-        event.channel?.id
-          ? String(event.channel.id)
-          : event.metadata?.channelId
-            ? String(event.metadata.channelId)
-            : undefined,
-    },
-  });
-
-  // ==========================================================
-  // DETAILED AUDIT LOG
-  // ==========================================================
-
-  await logEvent({
     client,
     guild,
+    channel = null,
+    event,
+}) {
+    if (!guild || !event) {
+        return null;
+    }
 
-    event:
-      normalizedEvent,
-  });
+    const targetUserId =
+        event.metadata?.userId ||
+        event.targetUserId;
 
-  // ==========================================================
-  // PUBLIC MODERATION NOTIFICATION
-  // ==========================================================
+    const normalizedTargetUserId =
+        targetUserId
+            ? String(targetUserId)
+            : null;
 
-  await sendModerationNotification({
-    guild,
+    // ==========================================================
+    // EXEMPTION
+    // ==========================================================
 
-    event:
-      normalizedEvent,
-  });
+    if (
+        normalizedTargetUserId &&
+        isModerationExempt(
+            normalizedTargetUserId,
+        )
+    ) {
+        logger.info(
+            `Moderation action ignored for exempt user ` +
+                `${normalizedTargetUserId} in guild ${guild.id}`,
+        );
 
-  return caseId;
+        return null;
+    }
+
+    // ==========================================================
+    // CREATE CASE ID
+    // ==========================================================
+
+    const caseId =
+        await generateCaseId(
+            client,
+            guild.id,
+        );
+
+    // ==========================================================
+    // NORMALIZED EVENT
+    // ==========================================================
+
+    const normalizedEvent = {
+        ...event,
+
+        /*
+         * Accept the channel both ways:
+         *
+         * logModerationAction({
+         *   channel: interaction.channel,
+         *   event: {...}
+         * })
+         *
+         * OR:
+         *
+         * event: {
+         *   channel: interaction.channel
+         * }
+         */
+        channel:
+            channel ||
+            event.channel ||
+            null,
+
+        metadata: {
+            ...(event.metadata || {}),
+
+            ...(normalizedTargetUserId
+                ? {
+                      userId:
+                          normalizedTargetUserId,
+                  }
+                : {}),
+
+            ...(channel?.id
+                ? {
+                      channelId:
+                          String(channel.id),
+                  }
+                : event.channel?.id
+                  ? {
+                        channelId:
+                            String(
+                                event.channel.id,
+                            ),
+                    }
+                  : {}),
+        },
+
+        targetUserId:
+            normalizedTargetUserId,
+
+        caseId,
+    };
+
+    // ==========================================================
+    // STORE CASE
+    // ==========================================================
+
+    await storeModerationCase({
+        guildId:
+            guild.id,
+
+        caseId,
+
+        caseData: {
+            action:
+                event.action,
+
+            target:
+                event.target,
+
+            executor:
+                event.executor,
+
+            reason:
+                event.reason,
+
+            duration:
+                event.duration,
+
+            metadata:
+                normalizedEvent.metadata,
+
+            targetUserId:
+                normalizedTargetUserId,
+
+            moderatorId:
+                event.metadata?.moderatorId
+                    ? String(
+                          event.metadata.moderatorId,
+                      )
+                    : undefined,
+
+            channelId:
+                channel?.id
+                    ? String(channel.id)
+                    : event.channel?.id
+                      ? String(
+                            event.channel.id,
+                        )
+                      : event.metadata?.channelId
+                        ? String(
+                              event.metadata.channelId,
+                          )
+                        : undefined,
+        },
+    });
+
+    // ==========================================================
+    // DETAILED AUDIT LOG
+    // ==========================================================
+
+    await logEvent({
+        client,
+        guild,
+        event:
+            normalizedEvent,
+    });
+
+    // ==========================================================
+    // PUBLIC MODERATION NOTIFICATION
+    // ==========================================================
+
+    await sendModerationNotification({
+        guild,
+        channel:
+            normalizedEvent.channel,
+        event:
+            normalizedEvent,
+    });
+
+    return caseId;
 }
