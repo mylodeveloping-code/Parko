@@ -1,13 +1,14 @@
-import { getColor } from '../../config/bot.js';
+import { EmbedBuilder } from 'discord.js';
 
 import {
     SlashCommandBuilder,
     PermissionFlagsBits,
 } from 'discord.js';
 
+import { getColor } from '../../config/bot.js';
+
 import {
     createEmbed,
-    warningEmbed,
 } from '../../utils/embeds.js';
 
 import {
@@ -17,15 +18,19 @@ import {
 } from '../../utils/moderation.js';
 
 import { logger } from '../../utils/logger.js';
-import { WarningService } from '../../services/moderation/warningService.js';
-import { ModerationService } from '../../services/moderation/moderationService.js';
+
+import {
+    WarningService,
+} from '../../services/moderation/warningService.js';
 
 import {
     TitanBotError,
     ErrorTypes,
 } from '../../utils/errorHandler.js';
 
-import { InteractionHelper } from '../../utils/interactionHelper.js';
+import {
+    InteractionHelper,
+} from '../../utils/interactionHelper.js';
 
 const WARNING_ROLES = {
     1: '1537643745720148018',
@@ -36,77 +41,126 @@ const WARNING_ROLES = {
 const THIRTY_DAYS =
     30 * 24 * 60 * 60 * 1000;
 
-export default {
-    data: new SlashCommandBuilder()
-        .setName('warn')
-        .setDescription('Warn a user')
-        .addUserOption((o) =>
-            o
-                .setName('target')
-                .setRequired(true)
-                .setDescription('User to warn')
-        )
-        .addStringOption((o) =>
-            o
-                .setName('reason')
-                .setRequired(true)
-                .setDescription('Reason for the warning')
-        )
-        .setDefaultMemberPermissions(
-            PermissionFlagsBits.ModerateMembers,
-        ),
+// ============================================================
+// CLEAN WARNING EMBEDS
+// ============================================================
+//
+// These deliberately build the embed locally instead of using
+// the older branded successEmbed()/warningEmbed() helpers.
+// That prevents the old "Parko" branding from appearing here.
+// ============================================================
 
-    category: 'moderation',
+function cleanSuccessEmbed(
+    title,
+    description
+) {
+    return new EmbedBuilder()
+        .setColor(
+            getColor('success')
+        )
+        .setTitle(
+            `✅ ${title}`
+        )
+        .setDescription(
+            description
+        );
+}
+
+function cleanWarningEmbed(
+    title,
+    description
+) {
+    return new EmbedBuilder()
+        .setColor(
+            getColor('warning')
+        )
+        .setTitle(
+            title
+        )
+        .setDescription(
+            description
+        );
+}
+
+export default {
+    data:
+        new SlashCommandBuilder()
+            .setName('warn')
+            .setDescription(
+                'Warn a user'
+            )
+
+            .addUserOption(
+                option =>
+                    option
+                        .setName(
+                            'target'
+                        )
+                        .setRequired(
+                            true
+                        )
+                        .setDescription(
+                            'User to warn'
+                        )
+            )
+
+            .addStringOption(
+                option =>
+                    option
+                        .setName(
+                            'reason'
+                        )
+                        .setRequired(
+                            true
+                        )
+                        .setDescription(
+                            'Reason for the warning'
+                        )
+            )
+
+            .setDefaultMemberPermissions(
+                PermissionFlagsBits.ModerateMembers
+            ),
+
+    category:
+        'moderation',
 
     async execute(
         interaction,
         config,
-        client,
+        client
     ) {
-        const isPrefixCommand =
-            interaction._isPrefixCommand === true;
+        const deferSuccess =
+            await InteractionHelper.safeDefer(
+                interaction
+            );
 
-        // ====================================================
-        // SLASH COMMAND DEFER
-        // ====================================================
+        if (!deferSuccess) {
+            logger.warn(
+                'Warn interaction defer failed',
+                {
+                    userId:
+                        interaction.user.id,
 
-        if (!isPrefixCommand) {
-            const deferSuccess =
-                await InteractionHelper.safeDefer(
-                    interaction,
-                );
+                    guildId:
+                        interaction.guildId,
 
-            if (!deferSuccess) {
-                logger.warn(
-                    'Warn interaction defer failed',
-                    {
-                        userId:
-                            interaction.user.id,
+                    commandName:
+                        'warn',
+                }
+            );
 
-                        guildId:
-                            interaction.guildId,
-
-                        commandName:
-                            'warn',
-                    },
-                );
-
-                return;
-            }
+            return;
         }
-
-        // ====================================================
-        // TARGET / REASON
-        // ====================================================
 
         const target =
             interaction.options.getUser(
-                'target',
+                'target'
             );
 
         const reason =
             interaction.options.getString(
-                'reason',
+                'reason'
             );
 
         const moderator =
@@ -118,6 +172,10 @@ export default {
         const guildId =
             interaction.guildId;
 
+        // ========================================================
+        // BASIC VALIDATION
+        // ========================================================
+
         if (!target) {
             throw new TitanBotError(
                 'Missing target user',
@@ -126,7 +184,7 @@ export default {
                 {
                     subtype:
                         'invalid_user',
-                },
+                }
             );
         }
 
@@ -134,29 +192,29 @@ export default {
             throw new TitanBotError(
                 'Guild unavailable',
                 ErrorTypes.INTERNAL,
-                'This command can only be used inside a server.',
+                'This command can only be used inside a server.'
             );
         }
 
-        // ====================================================
+        // ========================================================
         // MODERATION EXEMPTION
-        // ====================================================
+        // ========================================================
 
         if (
             isModerationExempt(
-                target.id,
+                target.id
             )
         ) {
             throw new TitanBotError(
                 'User is moderation exempt',
                 ErrorTypes.VALIDATION,
-                'This user is exempt from all moderation actions.',
+                'This user is exempt from all moderation actions.'
             );
         }
 
-        // ====================================================
+        // ========================================================
         // REASON
-        // ====================================================
+        // ========================================================
 
         if (!reason) {
             throw new TitanBotError(
@@ -166,35 +224,40 @@ export default {
                 {
                     subtype:
                         'missing_required',
-                },
+                }
             );
         }
 
-        // ====================================================
+        // ========================================================
         // RESOLVE MEMBER
-        // ====================================================
+        // ========================================================
 
         const member =
             await resolveModerationTarget(
                 guild,
-                target.id,
+                target.id
             );
 
-        // ====================================================
-        // HIERARCHY
-        // ====================================================
+        /*
+         * IMPORTANT:
+         *
+         * There is intentionally NO moderation-hierarchy check
+         * here.
+         *
+         * Warnings are stored in the warning database and do not
+         * require the bot to modify the target's permissions,
+         * timeout, kick, or role hierarchy.
+         *
+         * This allows the server owner to receive warnings too.
+         */
 
-        if (member) {
-            ModerationService.assertModerationHierarchy(
-                interaction.member,
-                member,
-                'warn',
-            );
-        }
+        const isServerOwner =
+            target.id ===
+            guild.ownerId;
 
-        // ====================================================
+        // ========================================================
         // DATABASE WARNING
-        // ====================================================
+        // ========================================================
 
         const {
             id,
@@ -218,31 +281,43 @@ export default {
         const warningLevel =
             Math.min(
                 totalCount,
-                3,
+                3
             );
 
-        // ====================================================
+        // ========================================================
         // WARNING ROLES
-        // ====================================================
+        // ========================================================
+
+        let warningRolesUpdated =
+            true;
 
         if (member) {
             try {
                 for (
                     let level = 1;
-                    level <= warningLevel;
+                    level <=
+                        warningLevel;
                     level++
                 ) {
                     const roleId =
-                        WARNING_ROLES[level];
+                        WARNING_ROLES[
+                            level
+                        ];
+
+                    if (
+                        !roleId
+                    ) {
+                        continue;
+                    }
 
                     if (
                         !member.roles.cache.has(
-                            roleId,
+                            roleId
                         )
                     ) {
                         await member.roles.add(
                             roleId,
-                            `Warning ${level} role - ${totalCount} total warnings`,
+                            `Warning ${level} role - ${totalCount} total warnings`
                         );
                     }
                 }
@@ -259,11 +334,14 @@ export default {
                             totalCount,
 
                         warningLevel,
-                    },
+                    }
                 );
             } catch (roleError) {
-                logger.error(
-                    `Failed to update warning roles for ${target.tag}`,
+                warningRolesUpdated =
+                    false;
+
+                logger.warn(
+                    `Warning recorded for ${target.tag}, but warning roles could not be updated.`,
                     {
                         userId:
                             target.id,
@@ -277,42 +355,26 @@ export default {
 
                         error:
                             roleError,
-                    },
+                    }
                 );
-
-                // For prefix commands, do not send a separate
-                // public message. The moderation notification
-                // is the only public response.
-                if (!isPrefixCommand) {
-                    await InteractionHelper.safeEditReply(
-                        interaction,
-                        {
-                            embeds: [
-                                warningEmbed(
-                                    `⚠️ **Warned** ${target.tag}`,
-                                    `**Reason:** ${reason}\n` +
-                                    `**Warning #:** ${totalCount}\n\n` +
-                                    `⚠️ The warning was recorded, but I could not update the warning roles.\n` +
-                                    `Make sure I have **Manage Roles** permission and that my bot role is above all three warning roles.`,
-                                ),
-                            ],
-                        },
-                    );
-                }
-
-                return;
             }
         }
 
-        // ====================================================
+        // ========================================================
         // THIRD WARNING = 30 DAY BAN
-        // ====================================================
+        // ========================================================
 
         let wasBanned =
             false;
 
+        /*
+         * Discord does not allow a server owner to be banned.
+         *
+         * The warning itself is still recorded.
+         */
         if (
-            totalCount === 3
+            totalCount === 3 &&
+            !isServerOwner
         ) {
             try {
                 await guild.members.ban(
@@ -323,7 +385,7 @@ export default {
 
                         deleteMessageSeconds:
                             0,
-                    },
+                    }
                 );
 
                 wasBanned =
@@ -347,7 +409,7 @@ export default {
 
                         banDuration:
                             '30 days',
-                    },
+                    }
                 );
 
                 setTimeout(
@@ -355,7 +417,7 @@ export default {
                         try {
                             await guild.members.unban(
                                 target.id,
-                                '30-day ban expired after third warning',
+                                '30-day ban expired after third warning'
                             );
 
                             logger.info(
@@ -368,7 +430,7 @@ export default {
 
                                     warningId:
                                         id,
-                                },
+                                }
                             );
                         } catch (
                             unbanError
@@ -386,11 +448,11 @@ export default {
 
                                     error:
                                         unbanError,
-                                },
+                                }
                             );
                         }
                     },
-                    THIRTY_DAYS,
+                    THIRTY_DAYS
                 );
             } catch (
                 banError
@@ -411,14 +473,14 @@ export default {
 
                         error:
                             banError,
-                    },
+                    }
                 );
             }
         }
 
-        // ====================================================
+        // ========================================================
         // DM USER
-        // ====================================================
+        // ========================================================
 
         try {
             let warningDM;
@@ -447,6 +509,7 @@ export default {
                                 inline:
                                     false,
                             },
+
                             {
                                 name:
                                     'Warning #',
@@ -456,12 +519,12 @@ export default {
 
                                 inline:
                                     true,
-                            },
+                            }
                         )
                         .setColor(
                             getColor(
-                                'error',
-                            ),
+                                'error'
+                            )
                         );
             } else {
                 warningDM =
@@ -483,6 +546,7 @@ export default {
                                 inline:
                                     false,
                             },
+
                             {
                                 name:
                                     'Warning #',
@@ -492,12 +556,12 @@ export default {
 
                                 inline:
                                     true,
-                            },
+                            }
                         )
                         .setColor(
                             getColor(
-                                'warning',
-                            ),
+                                'warning'
+                            )
                         );
             }
 
@@ -522,7 +586,7 @@ export default {
                         totalCount,
 
                     wasBanned,
-                },
+                }
             );
         } catch (
             dmError
@@ -540,25 +604,21 @@ export default {
 
                     error:
                         dmError,
-                },
+                }
             );
         }
 
-        // ====================================================
-        // MODERATION NOTIFICATION
-        // ====================================================
-        //
-        // This is the ONLY public response for prefix commands.
-        //
-        // IMPORTANT:
-        // Pass interaction.channel so the moderation notification
-        // is sent in the SAME channel where the command was used.
-        //
+        // ========================================================
+        // LOG MODERATION ACTION
+        // ========================================================
 
         await logModerationAction({
             client,
 
             guild,
+
+            channel:
+                interaction.channel,
 
             event: {
                 action:
@@ -571,11 +631,6 @@ export default {
                     `${moderator.tag} (${moderator.id})`,
 
                 reason,
-
-                // This tells moderationService.js exactly where
-                // the warning command was executed.
-                channel:
-                    interaction.channel,
 
                 metadata: {
                     userId:
@@ -597,25 +652,61 @@ export default {
 
                     warningRoles:
                         Object.values(
-                            WARNING_ROLES,
+                            WARNING_ROLES
                         ).slice(
                             0,
-                            warningLevel,
+                            warningLevel
                         ),
+
+                    warningRolesUpdated,
 
                     bannedFor30Days:
                         wasBanned,
+
+                    serverOwner:
+                        isServerOwner,
                 },
             },
         });
 
-        // ====================================================
-        // NO ADDITIONAL RESPONSE
-        // ====================================================
-        //
-        // We intentionally do not send/edit a success message.
-        //
+        // ========================================================
+        // SUCCESS RESPONSE
+        // ========================================================
 
-        return;
+        let description =
+            `**Reason:** ${reason}\n` +
+            `**Warning #:** ${totalCount}`;
+
+        if (
+            isServerOwner
+        ) {
+            description +=
+                '\n\n⚠️ This user is the server owner, so Discord will not allow the 30-day ban.';
+        } else if (
+            totalCount === 3 &&
+            wasBanned
+        ) {
+            description +=
+                '\n\n🔨 **This was their third warning. They have been banned for 30 days.**';
+        }
+
+        if (
+            !warningRolesUpdated
+        ) {
+            description +=
+                '\n\n⚠️ The warning was recorded, but the warning roles could not be updated.';
+        }
+
+        await InteractionHelper.safeEditReply(
+            interaction,
+            {
+                embeds: [
+                    cleanSuccessEmbed(
+                        `Warned ${target.tag}`,
+                        description
+                    ),
+                ],
+            }
+        );
     },
 };

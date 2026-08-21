@@ -20,7 +20,13 @@ import {
 
 import { isBlacklisted } from './blacklist.js';
 
-export { buildPrefixUsage };
+export {
+    buildPrefixUsage,
+};
+
+// ============================================================
+// COMMAND JSON
+// ============================================================
 
 function getCommandJson(commandData) {
     if (
@@ -33,25 +39,44 @@ function getCommandJson(commandData) {
     return commandData || {};
 }
 
+// ============================================================
+// COMMAND NAME
+// ============================================================
+
 function getCommandName(command) {
     const data =
-        getCommandJson(command?.data);
+        getCommandJson(
+            command?.data
+        );
 
     return data?.name
-        ? String(data.name).toLowerCase()
+        ? String(
+            data.name
+        ).toLowerCase()
         : null;
 }
 
-export function resolveSlashAccessKey(interaction) {
+// ============================================================
+// SLASH ACCESS KEY
+// ============================================================
+
+export function resolveSlashAccessKey(
+    interaction
+) {
     const group =
         interaction.options.getSubcommandGroup(
-            false,
+            false
         );
 
     const subcommand =
-        interaction.options.getSubcommand(false);
+        interaction.options.getSubcommand(
+            false
+        );
 
-    if (group && subcommand) {
+    if (
+        group &&
+        subcommand
+    ) {
         return `${interaction.commandName} ${group} ${subcommand}`;
     }
 
@@ -62,14 +87,18 @@ export function resolveSlashAccessKey(interaction) {
     return interaction.commandName;
 }
 
+// ============================================================
+// PREFIX ACCESS KEY
+// ============================================================
+
 export function resolvePrefixAccessKey(
     commandData,
-    args,
+    args
 ) {
     const options =
         mapArgumentsToOptions(
             args,
-            commandData,
+            commandData
         );
 
     const subcommand =
@@ -79,13 +108,18 @@ export function resolvePrefixAccessKey(
         options.getSubcommandGroup();
 
     const commandName =
-        getCommandJson(commandData)?.name;
+        getCommandJson(
+            commandData
+        )?.name;
 
     if (!commandName) {
         return null;
     }
 
-    if (group && subcommand) {
+    if (
+        group &&
+        subcommand
+    ) {
         return `${commandName} ${group} ${subcommand}`;
     }
 
@@ -95,6 +129,10 @@ export function resolvePrefixAccessKey(
 
     return commandName;
 }
+
+// ============================================================
+// RESOLVE USER ID
+// ============================================================
 
 function resolveUserId(value) {
     if (!value) {
@@ -106,153 +144,342 @@ function resolveUserId(value) {
 
     const mention =
         stringValue.match(
-            /^<@!?(\d+)>$/,
+            /^<@!?(\d+)>$/
         );
 
     if (mention) {
         return mention[1];
     }
 
-    if (/^\d+$/.test(stringValue)) {
+    if (
+        /^\d{17,20}$/.test(
+            stringValue
+        )
+    ) {
         return stringValue;
     }
 
     return null;
 }
 
-async function resolvePrefixUser(
+// ============================================================
+// RESOLVE PREFIX MEMBER
+// ============================================================
+//
+// Prefix moderation commands often need a GuildMember rather than
+// merely a User.
+//
+// This function ALWAYS attempts to resolve the member from the
+// guild. That fixes commands such as:
+//
+//   >mute 1393674823514980352 10m test
+//   >warn 123456789012345678 test
+//
+// even when the member is not currently in the cache.
+// ============================================================
+
+async function resolvePrefixMember(
     message,
-    rawValue,
+    rawValue
 ) {
     const userId =
-        resolveUserId(rawValue);
+        resolveUserId(
+            rawValue
+        );
 
     if (!userId) {
         return null;
     }
 
+    if (!message.guild) {
+        return null;
+    }
+
+    // --------------------------------------------------------
+    // Guild member cache
+    // --------------------------------------------------------
+
     const cachedMember =
-        message.guild?.members?.cache?.get(
-            userId,
+        message.guild.members.cache.get(
+            userId
         );
 
-    if (cachedMember?.user) {
-        return cachedMember.user;
+    if (cachedMember) {
+        return cachedMember;
     }
+
+    // --------------------------------------------------------
+    // Guild member API fetch
+    // --------------------------------------------------------
+
+    try {
+        return await message.guild.members.fetch(
+            userId
+        );
+    } catch (error) {
+        logger.debug(
+            `Unable to resolve prefix guild member ${userId}:`,
+            error
+        );
+
+        return null;
+    }
+}
+
+// ============================================================
+// RESOLVE PREFIX USER
+// ============================================================
+
+async function resolvePrefixUser(
+    message,
+    rawValue
+) {
+    const member =
+        await resolvePrefixMember(
+            message,
+            rawValue
+        );
+
+    if (member?.user) {
+        return member.user;
+    }
+
+    const userId =
+        resolveUserId(
+            rawValue
+        );
+
+    if (!userId) {
+        return null;
+    }
+
+    // --------------------------------------------------------
+    // User cache
+    // --------------------------------------------------------
 
     const cachedUser =
         message.client?.users?.cache?.get(
-            userId,
+            userId
         );
 
     if (cachedUser) {
         return cachedUser;
     }
 
+    // --------------------------------------------------------
+    // Discord API fallback
+    // --------------------------------------------------------
+
     try {
         return await message.client.users.fetch(
-            userId,
+            userId
         );
-    } catch {
+    } catch (error) {
+        logger.debug(
+            `Unable to resolve prefix user ${userId}:`,
+            error
+        );
+
         return null;
     }
 }
 
+// ============================================================
+// RESOLVE USER/MEMBER OPTION
+// ============================================================
+
+async function resolveUserOption(
+    message,
+    options,
+    optionDef,
+    resolvedUsers,
+    resolvedMembers
+) {
+    if (
+        !optionDef ||
+        optionDef.type !== 6
+    ) {
+        return;
+    }
+
+    const raw =
+        options.getUser(
+            optionDef.name
+        );
+
+    if (!raw) {
+        return;
+    }
+
+    const member =
+        await resolvePrefixMember(
+            message,
+            raw
+        );
+
+    if (member) {
+        resolvedMembers.set(
+            optionDef.name,
+            member
+        );
+
+        if (member.user) {
+            resolvedUsers.set(
+                optionDef.name,
+                member.user
+            );
+        }
+
+        return;
+    }
+
+    const user =
+        await resolvePrefixUser(
+            message,
+            raw
+        );
+
+    if (user) {
+        resolvedUsers.set(
+            optionDef.name,
+            user
+        );
+    }
+}
+
+// ============================================================
+// CREATE MOCK INTERACTION
+// ============================================================
+
 export async function createMockInteraction(
     message,
     commandData,
-    args,
+    args
 ) {
     const commandJson =
-        getCommandJson(commandData);
+        getCommandJson(
+            commandData
+        );
 
     const options =
         mapArgumentsToOptions(
             args,
-            commandData,
+            commandData
         );
 
-    const resolvedUsers = new Map();
+    // --------------------------------------------------------
+    // Resolved Discord objects
+    // --------------------------------------------------------
+
+    const resolvedUsers =
+        new Map();
+
+    const resolvedMembers =
+        new Map();
 
     const commandOptions =
         commandJson?.options || [];
 
-    async function resolveUserOption(
-        optionDef,
+    // --------------------------------------------------------
+    // Direct command options
+    // --------------------------------------------------------
+
+    for (
+        const optionDef
+        of commandOptions
     ) {
-        if (optionDef?.type !== 6) {
-            return;
-        }
+        await resolveUserOption(
+            message,
+            options,
+            optionDef,
+            resolvedUsers,
+            resolvedMembers
+        );
 
-        const raw =
-            options.getUser(
-                optionDef.name,
-            );
+        // ----------------------------------------------------
+        // Normal subcommand
+        // ----------------------------------------------------
 
-        if (!raw) {
-            return;
-        }
-
-        const user =
-            await resolvePrefixUser(
-                message,
-                raw,
-            );
-
-        if (user) {
-            resolvedUsers.set(
-                optionDef.name,
-                user,
-            );
-        }
-    }
-
-    for (const option of commandOptions) {
-        await resolveUserOption(option);
-
-        if (option.type === 1) {
+        if (
+            optionDef.type === 1
+        ) {
             for (
                 const subOption
-                of option.options || []
+                of optionDef.options || []
             ) {
                 await resolveUserOption(
+                    message,
+                    options,
                     subOption,
+                    resolvedUsers,
+                    resolvedMembers
                 );
             }
         }
 
-        if (option.type === 2) {
+        // ----------------------------------------------------
+        // Subcommand group
+        // ----------------------------------------------------
+
+        if (
+            optionDef.type === 2
+        ) {
             for (
                 const group
-                of option.options || []
+                of optionDef.options || []
             ) {
                 for (
                     const subOption
                     of group.options || []
                 ) {
                     await resolveUserOption(
+                        message,
+                        options,
                         subOption,
+                        resolvedUsers,
+                        resolvedMembers
                     );
                 }
             }
         }
     }
 
-    let replyMessage = null;
+    // --------------------------------------------------------
+    // Mock response state
+    // --------------------------------------------------------
+
+    let replyMessage =
+        null;
+
+    let hasReplied =
+        false;
 
     const mockInteraction = {
-        user: message.author,
-        member: message.member,
-        channel: message.channel,
-        guild: message.guild,
+        user:
+            message.author,
+
+        member:
+            message.member,
+
+        channel:
+            message.channel,
+
+        guild:
+            message.guild,
+
         guildId:
-            message.guild?.id ?? null,
+            message.guild?.id ??
+            null,
 
         commandName:
-            commandJson?.name ?? null,
+            commandJson?.name ??
+            null,
 
-        commandId: message.id,
-        id: message.id,
+        commandId:
+            message.id,
+
+        id:
+            message.id,
 
         createdTimestamp:
             message.createdTimestamp,
@@ -260,16 +487,33 @@ export async function createMockInteraction(
         createdAt:
             message.createdAt,
 
-        client: message.client,
+        client:
+            message.client,
 
-        _isPrefixCommand: true,
-        _replyMessage: null,
-        _commandStartTime: Date.now(),
+        _isPrefixCommand:
+            true,
 
-        deferred: false,
-        replied: false,
-        ephemeral: false,
-        webhook: null,
+        _replyMessage:
+            null,
+
+        _commandStartTime:
+            Date.now(),
+
+        deferred:
+            false,
+
+        replied:
+            false,
+
+        ephemeral:
+            false,
+
+        webhook:
+            null,
+
+        // ----------------------------------------------------
+        // Permission getter
+        // ----------------------------------------------------
 
         get memberPermissions() {
             return (
@@ -277,6 +521,10 @@ export async function createMockInteraction(
                 null
             );
         },
+
+        // ----------------------------------------------------
+        // OPTIONS
+        // ----------------------------------------------------
 
         options: {
             get(name) {
@@ -289,32 +537,27 @@ export async function createMockInteraction(
 
             getUser(name) {
                 return (
-                    resolvedUsers.get(name) ??
+                    resolvedUsers.get(
+                        name
+                    ) ??
                     null
                 );
             },
 
             getMember(name) {
-                const user =
-                    resolvedUsers.get(name);
-
-                if (
-                    !user ||
-                    !message.guild
-                ) {
-                    return null;
-                }
-
                 return (
-                    message.guild.members.cache.get(
-                        user.id,
-                    ) ?? null
+                    resolvedMembers.get(
+                        name
+                    ) ??
+                    null
                 );
             },
 
             getChannel(name) {
                 const raw =
-                    options.getString(name);
+                    options.getString(
+                        name
+                    );
 
                 if (
                     !raw ||
@@ -325,7 +568,7 @@ export async function createMockInteraction(
 
                 const match =
                     String(raw).match(
-                        /^<#(\d+)>$/,
+                        /^<#(\d+)>$/
                     );
 
                 const channelId =
@@ -333,14 +576,29 @@ export async function createMockInteraction(
                         ? match[1]
                         : String(raw);
 
+                const cached =
+                    message.guild.channels.cache.get(
+                        channelId
+                    );
+
+                if (cached) {
+                    return cached;
+                }
+
                 return message.guild.channels
-                    .fetch(channelId)
-                    .catch(() => null);
+                    .fetch(
+                        channelId
+                    )
+                    .catch(
+                        () => null
+                    );
             },
 
             getRole(name) {
                 const raw =
-                    options.getString(name);
+                    options.getString(
+                        name
+                    );
 
                 if (
                     !raw ||
@@ -351,7 +609,7 @@ export async function createMockInteraction(
 
                 const match =
                     String(raw).match(
-                        /^<@&(\d+)>$/,
+                        /^<@&(\d+)>$/
                     );
 
                 const roleId =
@@ -359,17 +617,34 @@ export async function createMockInteraction(
                         ? match[1]
                         : String(raw);
 
+                const cached =
+                    message.guild.roles.cache.get(
+                        roleId
+                    );
+
+                if (cached) {
+                    return cached;
+                }
+
                 return message.guild.roles
-                    .fetch(roleId)
-                    .catch(() => null);
+                    .fetch(
+                        roleId
+                    )
+                    .catch(
+                        () => null
+                    );
             },
 
             getInteger(name) {
-                return options.getInteger(name);
+                return options.getInteger(
+                    name
+                );
             },
 
             getBoolean(name) {
-                return options.getBoolean(name);
+                return options.getBoolean(
+                    name
+                );
             },
 
             getSubcommand() {
@@ -386,7 +661,10 @@ export async function createMockInteraction(
 
             _hoistedOptions:
                 args.map(
-                    (arg, index) => ({
+                    (
+                        arg,
+                        index
+                    ) => ({
                         name:
                             commandJson
                                 ?.options?.[
@@ -394,82 +672,332 @@ export async function createMockInteraction(
                             ]?.name ||
                             `arg${index}`,
 
-                        value: arg,
-                        type: 3,
-                    }),
+                        value:
+                            arg,
+
+                        type:
+                            3,
+                    })
                 ),
         },
 
-        reply: async (payload) => {
-            if (replyMessage) {
+        // ====================================================
+        // REPLY
+        // ====================================================
+
+        reply:
+            async (
+                payload
+            ) => {
+                if (
+                    hasReplied &&
+                    replyMessage
+                ) {
+                    return mockInteraction.editReply(
+                        payload
+                    );
+                }
+
+                replyMessage =
+                    await message.channel.send(
+                        payload
+                    );
+
+                hasReplied =
+                    true;
+
+                mockInteraction.replied =
+                    true;
+
+                mockInteraction.deferred =
+                    false;
+
+                mockInteraction._replyMessage =
+                    replyMessage;
+
+                return replyMessage;
+            },
+
+        // ====================================================
+        // EDIT REPLY
+        // ====================================================
+
+        editReply:
+            async (
+                payload
+            ) => {
+                if (
+                    !replyMessage
+                ) {
+                    replyMessage =
+                        await message.channel.send(
+                            payload
+                        );
+
+                    hasReplied =
+                        true;
+
+                    mockInteraction.replied =
+                        true;
+
+                    mockInteraction.deferred =
+                        false;
+
+                    mockInteraction._replyMessage =
+                        replyMessage;
+
+                    return replyMessage;
+                }
+
+                const edited =
+                    await replyMessage.edit(
+                        payload
+                    );
+
+                replyMessage =
+                    edited;
+
+                hasReplied =
+                    true;
+
+                mockInteraction.replied =
+                    true;
+
+                mockInteraction.deferred =
+                    false;
+
+                mockInteraction._replyMessage =
+                    edited;
+
+                return edited;
+            },
+
+        // ====================================================
+        // FOLLOW UP
+        // ====================================================
+
+        followUp:
+            async (
+                payload
+            ) => {
+                return message.channel.send(
+                    payload
+                );
+            },
+
+        // ====================================================
+        // DEFER
+        // ====================================================
+
+        deferReply:
+            async () => {
+                mockInteraction.deferred =
+                    true;
+
+                return mockInteraction;
+            },
+
+        // ====================================================
+        // FETCH REPLY
+        // ====================================================
+
+        fetchReply:
+            async () => {
+                return (
+                    replyMessage ||
+                    message
+                );
+            },
+
+        // ====================================================
+        // DELETE REPLY
+        // ====================================================
+
+        deleteReply:
+            async () => {
+                if (
+                    replyMessage?.deletable
+                ) {
+                    await replyMessage.delete();
+                }
+
+                replyMessage =
+                    null;
+
+                hasReplied =
+                    false;
+
+                mockInteraction._replyMessage =
+                    null;
+
+                mockInteraction.replied =
+                    false;
+
+                mockInteraction.deferred =
+                    false;
+
+                return null;
+            },
+    };
+
+    // ============================================================
+    // RESPONSE COORDINATOR
+    // ============================================================
+
+    const coordinator =
+        ResponseCoordinator.attach(
+            mockInteraction,
+            {
+                message,
+            }
+        );
+
+    mockInteraction._responseCoordinator =
+        coordinator;
+
+    // ============================================================
+    // INTERACTION HELPER
+    // ============================================================
+
+    try {
+        InteractionHelper.patchInteractionResponses(
+            mockInteraction
+        );
+    } catch (error) {
+        logger.warn(
+            'Failed to patch prefix interaction responses:',
+            error
+        );
+    }
+
+    /*
+     * Restore the direct prefix methods after patching.
+     *
+     * This guarantees prefix commands always send their output
+     * to the original message channel.
+     */
+
+    mockInteraction.reply =
+        async (
+            payload
+        ) => {
+            if (
+                hasReplied &&
+                replyMessage
+            ) {
                 return mockInteraction.editReply(
-                    payload,
+                    payload
                 );
             }
 
             replyMessage =
                 await message.channel.send(
-                    payload,
+                    payload
                 );
+
+            hasReplied =
+                true;
 
             mockInteraction.replied =
                 true;
+
+            mockInteraction.deferred =
+                false;
 
             mockInteraction._replyMessage =
                 replyMessage;
 
             return replyMessage;
-        },
+        };
 
-        editReply: async (payload) => {
-            if (!replyMessage) {
-                return mockInteraction.reply(
-                    payload,
-                );
+    mockInteraction.editReply =
+        async (
+            payload
+        ) => {
+            if (
+                !replyMessage
+            ) {
+                replyMessage =
+                    await message.channel.send(
+                        payload
+                    );
+
+                hasReplied =
+                    true;
+
+                mockInteraction.replied =
+                    true;
+
+                mockInteraction.deferred =
+                    false;
+
+                mockInteraction._replyMessage =
+                    replyMessage;
+
+                return replyMessage;
             }
 
-            replyMessage =
+            const edited =
                 await replyMessage.edit(
-                    payload,
+                    payload
                 );
+
+            replyMessage =
+                edited;
+
+            hasReplied =
+                true;
 
             mockInteraction.replied =
                 true;
 
+            mockInteraction.deferred =
+                false;
+
             mockInteraction._replyMessage =
-                replyMessage;
+                edited;
 
-            return replyMessage;
-        },
+            return edited;
+        };
 
-        followUp: async (payload) => {
+    mockInteraction.followUp =
+        async (
+            payload
+        ) => {
             return message.channel.send(
-                payload,
+                payload
             );
-        },
+        };
 
-        deferReply: async () => {
+    mockInteraction.deferReply =
+        async () => {
             mockInteraction.deferred =
                 true;
 
             return mockInteraction;
-        },
+        };
 
-        fetchReply: async () => {
+    mockInteraction.fetchReply =
+        async () => {
             return (
                 replyMessage ||
                 message
             );
-        },
+        };
 
-        deleteReply: async () => {
+    mockInteraction.deleteReply =
+        async () => {
             if (
                 replyMessage?.deletable
             ) {
                 await replyMessage.delete();
             }
 
-            replyMessage = null;
+            replyMessage =
+                null;
+
+            hasReplied =
+                false;
 
             mockInteraction._replyMessage =
                 null;
@@ -477,24 +1005,21 @@ export async function createMockInteraction(
             mockInteraction.replied =
                 false;
 
+            mockInteraction.deferred =
+                false;
+
             return null;
-        },
-    };
-
-    ResponseCoordinator.attach(
-        mockInteraction,
-        { message },
-    );
-
-    InteractionHelper.patchInteractionResponses(
-        mockInteraction,
-    );
+        };
 
     return mockInteraction;
 }
 
+// ============================================================
+// PREFIX SUPPORT
+// ============================================================
+
 export function supportsPrefixExecution(
-    command,
+    command
 ) {
     if (!command) {
         return false;
@@ -508,26 +1033,42 @@ export function supportsPrefixExecution(
     }
 
     const commandName =
-        getCommandName(command);
+        getCommandName(
+            command
+        );
 
     if (
         commandName &&
         SLASH_ONLY_COMMANDS.has(
-            commandName,
+            commandName
         )
     ) {
         return false;
     }
 
-    return (
+    if (
         typeof command.messageExecute ===
-            'function' ||
-        typeof command.prefixExecute ===
-            'function' ||
-        typeof command.execute ===
             'function'
+    ) {
+        return true;
+    }
+
+    if (
+        typeof command.prefixExecute ===
+            'function'
+    ) {
+        return true;
+    }
+
+    return (
+        typeof command.execute ===
+        'function'
     );
 }
+
+// ============================================================
+// EXECUTE PREFIX COMMAND
+// ============================================================
 
 export async function executePrefixCommand(
     command,
@@ -535,26 +1076,44 @@ export async function executePrefixCommand(
     args,
     client,
     prefixOverride = null,
-    guildConfig = null,
+    guildConfig = null
 ) {
-    if (!command || !message) {
-        return;
-    }
-
-    const commandName =
-        getCommandName(command);
-
-    if (
-        isBlacklisted(
-            message.author.id,
-        )
-    ) {
-        logger.info(
-            `Blocked blacklisted user ${message.author.tag} (${message.author.id}) from using prefix command.`,
+    if (!command) {
+        logger.warn(
+            'executePrefixCommand was called without a command.'
         );
 
         return;
     }
+
+    if (!message) {
+        logger.warn(
+            'executePrefixCommand was called without a message.'
+        );
+
+        return;
+    }
+
+    const commandName =
+        getCommandName(
+            command
+        );
+
+    if (
+        isBlacklisted(
+            message.author.id
+        )
+    ) {
+        logger.info(
+            `Blocked blacklisted user ${message.author.tag} (${message.author.id}) from using prefix command.`
+        );
+
+        return;
+    }
+
+    // ========================================================
+    // MESSAGE-BASED PREFIX COMMAND
+    // ========================================================
 
     if (
         typeof command.messageExecute ===
@@ -564,17 +1123,21 @@ export async function executePrefixCommand(
             await command.messageExecute(
                 message,
                 args,
-                client,
+                client
             );
         } catch (error) {
             logger.error(
                 `Error executing message-based prefix command ${commandName}:`,
-                error,
+                error
             );
         }
 
         return;
     }
+
+    // ========================================================
+    // CREATE PREFIX INTERACTION
+    // ========================================================
 
     let mockInteraction;
 
@@ -583,12 +1146,12 @@ export async function executePrefixCommand(
             await createMockInteraction(
                 message,
                 command.data,
-                args,
+                args
             );
     } catch (error) {
         logger.error(
             `Failed to create prefix interaction for ${commandName}:`,
-            error,
+            error
         );
 
         return;
@@ -602,6 +1165,10 @@ export async function executePrefixCommand(
         getCommandPrefix();
 
     try {
+        // ====================================================
+        // DEFAULT PERMISSIONS
+        // ====================================================
+
         const permissionAllowed =
             await enforceDefaultCommandPermissions(
                 mockInteraction,
@@ -609,25 +1176,36 @@ export async function executePrefixCommand(
                 {
                     source:
                         'messageAdapter.executePrefixCommand',
+
                     guildConfig,
-                },
+                }
             );
 
-        if (!permissionAllowed) {
+        if (
+            !permissionAllowed
+        ) {
             return;
         }
+
+        // ====================================================
+        // REQUIRED OPTIONS
+        // ====================================================
 
         const validation =
             mockInteraction.options.validateRequired();
 
-        if (!validation.valid) {
+        if (
+            !validation.valid
+        ) {
             if (
-                coordinator?.respondUsageFromCommand
+                coordinator &&
+                typeof coordinator.respondUsageFromCommand ===
+                    'function'
             ) {
                 await coordinator.respondUsageFromCommand(
                     prefix,
                     command,
-                    validation,
+                    validation
                 );
             } else {
                 await mockInteraction.reply({
@@ -635,13 +1213,17 @@ export async function executePrefixCommand(
                         buildPrefixUsage(
                             prefix,
                             command,
-                            validation,
+                            validation
                         ),
                 });
             }
 
             return;
         }
+
+        // ====================================================
+        // PREFIX EXECUTOR
+        // ====================================================
 
         if (
             typeof command.prefixExecute ===
@@ -650,11 +1232,15 @@ export async function executePrefixCommand(
             await command.prefixExecute(
                 mockInteraction,
                 guildConfig,
-                client,
+                client
             );
 
             return;
         }
+
+        // ====================================================
+        // NORMAL EXECUTOR
+        // ====================================================
 
         if (
             typeof command.execute ===
@@ -663,25 +1249,54 @@ export async function executePrefixCommand(
             await command.execute(
                 mockInteraction,
                 guildConfig,
-                client,
+                client
             );
 
             return;
         }
 
         logger.error(
-            `Command ${commandName} has no executable handler.`,
+            `Command ${commandName} has no executable handler.`
         );
     } catch (error) {
-        await handleInteractionError(
-            mockInteraction,
-            error,
-            {
-                type: 'prefix_command',
-                command: commandName,
-                source:
-                    'messageAdapter.executePrefixCommand',
-            },
-        );
+        try {
+            await handleInteractionError(
+                mockInteraction,
+                error,
+                {
+                    type:
+                        'prefix_command',
+
+                    command:
+                        commandName,
+
+                    source:
+                        'messageAdapter.executePrefixCommand',
+                }
+            );
+        } catch (
+            responseError
+        ) {
+            logger.error(
+                `Failed to send prefix command error for ${commandName}:`,
+                responseError
+            );
+
+            /*
+             * Absolute final fallback so a prefix command never
+             * silently fails.
+             */
+            try {
+                if (
+                    !mockInteraction.replied
+                ) {
+                    await message.channel.send(
+                        '❌ An error occurred while processing that command.'
+                    );
+                }
+            } catch {
+                // Nothing more can be done.
+            }
+        }
     }
 }
