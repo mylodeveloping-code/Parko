@@ -281,8 +281,8 @@ export default {
                 );
 
                 // For prefix commands, do not send a separate
-                // public success/error message. The moderation
-                // notification below is the only public message.
+                // public message. The moderation notification
+                // is the only public response.
                 if (!isPrefixCommand) {
                     await InteractionHelper.safeEditReply(
                         interaction,
@@ -545,21 +545,21 @@ export default {
         }
 
         // ====================================================
-        // LOG MODERATION ACTION
+        // MODERATION NOTIFICATION
         // ====================================================
         //
-        // This is the ONLY public moderation message.
-        // The moderation logger will send the message to the
-        // configured moderation/log channel.
+        // This is the ONLY public response for prefix commands.
+        //
+        // IMPORTANT:
+        // Do NOT pass interaction.channel here.
+        // The moderation logger will use its own configured
+        // moderation/log channel.
         //
 
         await logModerationAction({
             client,
 
             guild,
-
-            channel:
-                interaction.channel,
 
             event: {
                 action:
@@ -606,14 +606,10 @@ export default {
         });
 
         // ====================================================
-        // NO SUCCESS RESPONSE
+        // NO ADDITIONAL RESPONSE
         // ====================================================
         //
-        // We intentionally do NOT call reply(), editReply(),
-        // or send another message here.
-        //
-        // The moderation notification above is the only
-        // public message produced by this command.
+        // We intentionally do not send/edit a success message.
         //
 
         return;
