@@ -135,19 +135,6 @@ function resolveUserId(value) {
 // ============================================================
 // RESOLVE PREFIX USER
 // ============================================================
-//
-// Prefix commands can provide:
-//
-//   @User
-//   <@UserID>
-//   <@!UserID>
-//   UserID
-//
-// We first check cache, then fetch from Discord.
-//
-// This is intentionally async because a valid Discord user
-// may not exist in either local cache.
-//
 
 async function resolvePrefixUser(
     message,
@@ -223,10 +210,7 @@ export async function createMockInteraction(
         );
 
     // --------------------------------------------------------
-    // Resolve user options BEFORE command execution.
-    //
-    // This makes interaction.options.getUser() behave like
-    // a real Discord interaction.
+    // Resolve user options
     // --------------------------------------------------------
 
     const resolvedUsers = new Map();
@@ -261,10 +245,11 @@ export async function createMockInteraction(
     }
 
     // --------------------------------------------------------
-    // Also resolve user options inside subcommands.
+    // Resolve user options inside subcommands
     // --------------------------------------------------------
 
     for (const optionDef of commandOptions) {
+        // Subcommand
         if (optionDef.type === 1) {
             for (const subOption of optionDef.options || []) {
                 if (subOption.type !== 6) {
@@ -295,6 +280,7 @@ export async function createMockInteraction(
             }
         }
 
+        // Subcommand group
         if (optionDef.type === 2) {
             for (const group of optionDef.options || []) {
                 for (const subOption of group.options || []) {
@@ -332,12 +318,63 @@ export async function createMockInteraction(
         Date.now();
 
     let replyMessage = null;
-    let hasReplied = false;
+
+    // ========================================================
+    // MOCK INTERACTION
+    // ========================================================
 
     const mockInteraction = {
-        user: message.author,
+        // ----------------------------------------------------
+        // Basic interaction information
+        // ----------------------------------------------------
 
-        member: message.member,
+        user:
+            message.author,
+
+        member:
+            message.member,
+
+        guild:
+            message.guild,
+
+        guildId:
+            message.guild?.id ?? null,
+
+        channel:
+            message.channel,
+
+        client:
+            message.client,
+
+        commandName:
+            commandJson?.name ?? null,
+
+        commandId:
+            message.id,
+
+        id:
+            message.id,
+
+        applicationId:
+            message.client?.application?.id ??
+            message.client?.user?.id ??
+            null,
+
+        createdTimestamp:
+            message.createdTimestamp,
+
+        createdAt:
+            message.createdAt,
+
+        _commandStartTime:
+            commandStartTime,
+
+        _isPrefixCommand:
+            true,
+
+        // ----------------------------------------------------
+        // Permissions
+        // ----------------------------------------------------
 
         get memberPermissions() {
             return (
@@ -346,27 +383,83 @@ export async function createMockInteraction(
             );
         },
 
-        channel: message.channel,
+        // ----------------------------------------------------
+        // Discord interaction compatibility
+        //
+        // These are important because InteractionHelper and
+        // permission/command utilities may check them.
+        // ----------------------------------------------------
 
-        guild: message.guild,
+        isRepliable() {
+            return true;
+        },
 
-        guildId:
-            message.guild?.id ??
+        isCommand() {
+            return true;
+        },
+
+        isChatInputCommand() {
+            return true;
+        },
+
+        isAutocomplete() {
+            return false;
+        },
+
+        isButton() {
+            return false;
+        },
+
+        isStringSelectMenu() {
+            return false;
+        },
+
+        isRoleSelectMenu() {
+            return false;
+        },
+
+        isUserSelectMenu() {
+            return false;
+        },
+
+        isChannelSelectMenu() {
+            return false;
+        },
+
+        isMentionableSelectMenu() {
+            return false;
+        },
+
+        isModalSubmit() {
+            return false;
+        },
+
+        isAnySelectMenu() {
+            return false;
+        },
+
+        // ----------------------------------------------------
+        // Interaction state
+        // ----------------------------------------------------
+
+        deferred:
+            false,
+
+        replied:
+            false,
+
+        ephemeral:
+            false,
+
+        webhook:
             null,
 
-        commandName:
-            commandJson?.name ??
+        _replyMessage:
             null,
 
-        commandId:
-            message.id,
-
-        id:
-            message.id,
-
-        // ====================================================
+        // ----------------------------------------------------
         // OPTIONS
-        // ====================================================
+        // ----------------------------------------------------
 
         options: {
             get(name) {
@@ -456,16 +549,31 @@ export async function createMockInteraction(
                 return options.getInteger(name);
             },
 
+            getNumber(name) {
+                if (
+                    typeof options.getNumber ===
+                    'function'
+                ) {
+                    return options.getNumber(name);
+                }
+
+                return null;
+            },
+
             getBoolean(name) {
                 return options.getBoolean(name);
             },
 
-            getSubcommand() {
-                return options.getSubcommand();
+            getSubcommand(required = true) {
+                return options.getSubcommand(
+                    required,
+                );
             },
 
-            getSubcommandGroup() {
-                return options.getSubcommandGroup();
+            getSubcommandGroup(required = true) {
+                return options.getSubcommandGroup(
+                    required,
+                );
             },
 
             validateRequired() {
@@ -481,151 +589,163 @@ export async function createMockInteraction(
                                 ?.name ||
                             `arg${index}`,
 
-                        value: arg,
+                        value:
+                            arg,
 
-                        type: 3,
+                        type:
+                            3,
                     }),
                 ),
         },
 
-        createdTimestamp:
-            message.createdTimestamp,
-
-        createdAt:
-            message.createdAt,
-
-        _commandStartTime:
-            commandStartTime,
-
-        _isPrefixCommand:
-            true,
-
-        client:
-            message.client,
-
-        deferred:
-            false,
-
-        replied:
-            false,
-
-        ephemeral:
-            false,
-
-        webhook:
-            null,
-
-        _replyMessage:
-            null,
-
         // ====================================================
-        // DIRECT PREFIX RESPONSE
+        // REPLY
         // ====================================================
 
-        reply: async (payload) => {
-            if (
-                hasReplied &&
-                replyMessage
-            ) {
-                return mockInteraction.editReply(
-                    payload,
-                );
-            }
+        reply:
+            async (payload) => {
+                if (
+                    replyMessage
+                ) {
+                    return mockInteraction.editReply(
+                        payload,
+                    );
+                }
 
-            replyMessage =
-                await message.channel.send(
-                    payload,
-                );
-
-            hasReplied = true;
-
-            mockInteraction.replied =
-                true;
-
-            mockInteraction._replyMessage =
-                replyMessage;
-
-            return replyMessage;
-        },
-
-        editReply: async (payload) => {
-            if (!replyMessage) {
                 replyMessage =
                     await message.channel.send(
                         payload,
                     );
 
-                hasReplied = true;
-
                 mockInteraction.replied =
                     true;
+
+                mockInteraction.deferred =
+                    false;
 
                 mockInteraction._replyMessage =
                     replyMessage;
 
                 return replyMessage;
-            }
+            },
 
-            const edited =
-                await replyMessage.edit(
-                    payload,
-                );
+        // ====================================================
+        // EDIT REPLY
+        // ====================================================
 
-            mockInteraction.replied =
-                true;
+        editReply:
+            async (payload) => {
+                if (!replyMessage) {
+                    replyMessage =
+                        await message.channel.send(
+                            payload,
+                        );
 
-            mockInteraction._replyMessage =
-                edited;
+                    mockInteraction.replied =
+                        true;
 
-            return edited;
-        },
+                    mockInteraction.deferred =
+                        false;
 
-        followUp: async (payload) => {
-            return message.channel.send(
-                payload,
-            );
-        },
+                    mockInteraction._replyMessage =
+                        replyMessage;
 
-        deferReply: async () => {
-            mockInteraction.deferred =
-                true;
+                    return replyMessage;
+                }
 
-            return mockInteraction;
-        },
+                const edited =
+                    await replyMessage.edit(
+                        payload,
+                    );
 
-        fetchReply: async () => {
-            return (
-                replyMessage ||
-                message
-            );
-        },
+                mockInteraction.replied =
+                    true;
 
-        deleteReply: async () => {
-            if (
-                replyMessage &&
-                replyMessage.deletable
-            ) {
-                await replyMessage.delete();
-
-                replyMessage =
-                    null;
+                mockInteraction.deferred =
+                    false;
 
                 mockInteraction._replyMessage =
-                    null;
+                    edited;
+
+                return edited;
+            },
+
+        // ====================================================
+        // FOLLOW UP
+        // ====================================================
+
+        followUp:
+            async (payload) => {
+                return message.channel.send(
+                    payload,
+                );
+            },
+
+        // ====================================================
+        // DEFER REPLY
+        // ====================================================
+
+        deferReply:
+            async () => {
+                mockInteraction.deferred =
+                    true;
 
                 mockInteraction.replied =
                     false;
-            }
 
-            return null;
-        },
+                return mockInteraction;
+            },
+
+        // ====================================================
+        // FETCH REPLY
+        // ====================================================
+
+        fetchReply:
+            async () => {
+                return (
+                    replyMessage ||
+                    message
+                );
+            },
+
+        // ====================================================
+        // DELETE REPLY
+        // ====================================================
+
+        deleteReply:
+            async () => {
+                if (
+                    replyMessage &&
+                    replyMessage.deletable
+                ) {
+                    await replyMessage.delete();
+
+                    replyMessage =
+                        null;
+
+                    mockInteraction._replyMessage =
+                        null;
+
+                    mockInteraction.replied =
+                        false;
+
+                    mockInteraction.deferred =
+                        false;
+                }
+
+                return null;
+            },
+
+        // ====================================================
+        // RESPONSE COORDINATOR
+        // ====================================================
 
         _responseCoordinator:
             null,
     };
 
     // ========================================================
-    // RESPONSE COORDINATOR
+    // ATTACH RESPONSE COORDINATOR
     // ========================================================
 
     try {
@@ -647,7 +767,7 @@ export async function createMockInteraction(
     }
 
     // ========================================================
-    // INTERACTION HELPER
+    // PATCH INTERACTION RESPONSES
     // ========================================================
 
     try {
@@ -662,15 +782,16 @@ export async function createMockInteraction(
     }
 
     // ========================================================
-    // RESTORE DIRECT PREFIX METHODS
+    // RESTORE OUR PREFIX RESPONSE METHODS
+    //
+    // Some interaction helpers replace reply/editReply/
+    // deferReply. Prefix commands need these methods to send
+    // actual Discord messages, so restore them after patching.
     // ========================================================
 
     mockInteraction.reply =
         async (payload) => {
-            if (
-                hasReplied &&
-                replyMessage
-            ) {
+            if (replyMessage) {
                 return mockInteraction.editReply(
                     payload,
                 );
@@ -681,10 +802,11 @@ export async function createMockInteraction(
                     payload,
                 );
 
-            hasReplied = true;
-
             mockInteraction.replied =
                 true;
+
+            mockInteraction.deferred =
+                false;
 
             mockInteraction._replyMessage =
                 replyMessage;
@@ -700,10 +822,11 @@ export async function createMockInteraction(
                         payload,
                     );
 
-                hasReplied = true;
-
                 mockInteraction.replied =
                     true;
+
+                mockInteraction.deferred =
+                    false;
 
                 mockInteraction._replyMessage =
                     replyMessage;
@@ -718,6 +841,9 @@ export async function createMockInteraction(
 
             mockInteraction.replied =
                 true;
+
+            mockInteraction.deferred =
+                false;
 
             mockInteraction._replyMessage =
                 edited;
@@ -736,6 +862,9 @@ export async function createMockInteraction(
         async () => {
             mockInteraction.deferred =
                 true;
+
+            mockInteraction.replied =
+                false;
 
             return mockInteraction;
         };
@@ -763,6 +892,9 @@ export async function createMockInteraction(
                     null;
 
                 mockInteraction.replied =
+                    false;
+
+                mockInteraction.deferred =
                     false;
             }
 
@@ -851,6 +983,10 @@ export async function executePrefixCommand(
     const commandName =
         getCommandName(command);
 
+    logger.info(
+        `Starting prefix execution for ${commandName} with args: ${JSON.stringify(args)}`,
+    );
+
     if (
         isBlacklisted(
             message.author.id,
@@ -909,6 +1045,14 @@ export async function executePrefixCommand(
         return;
     }
 
+    if (!mockInteraction) {
+        logger.error(
+            `Prefix interaction was not created for ${commandName}.`,
+        );
+
+        return;
+    }
+
     const coordinator =
         mockInteraction._responseCoordinator;
 
@@ -920,6 +1064,10 @@ export async function executePrefixCommand(
         // ====================================================
         // DEFAULT PERMISSIONS
         // ====================================================
+
+        logger.debug(
+            `Checking default permissions for prefix command ${commandName}.`,
+        );
 
         const permissionAllowed =
             await enforceDefaultCommandPermissions(
@@ -933,6 +1081,10 @@ export async function executePrefixCommand(
                 },
             );
 
+        logger.debug(
+            `Permission result for ${commandName}: ${permissionAllowed}`,
+        );
+
         if (!permissionAllowed) {
             return;
         }
@@ -944,6 +1096,10 @@ export async function executePrefixCommand(
         const validation =
             mockInteraction.options
                 .validateRequired();
+
+        logger.debug(
+            `Required option validation for ${commandName}: ${JSON.stringify(validation)}`,
+        );
 
         if (!validation.valid) {
             if (
@@ -971,13 +1127,17 @@ export async function executePrefixCommand(
         }
 
         // ====================================================
-        // EXECUTE
+        // EXECUTE PREFIX HANDLER
         // ====================================================
 
         if (
             typeof command.prefixExecute ===
             'function'
         ) {
+            logger.info(
+                `Executing ${prefix}${commandName} using prefixExecute.`,
+            );
+
             await command.prefixExecute(
                 mockInteraction,
                 guildConfig,
@@ -987,10 +1147,18 @@ export async function executePrefixCommand(
             return;
         }
 
+        // ====================================================
+        // FALLBACK TO NORMAL EXECUTE
+        // ====================================================
+
         if (
             typeof command.execute ===
             'function'
         ) {
+            logger.info(
+                `Executing ${prefix}${commandName} using execute.`,
+            );
+
             await command.execute(
                 mockInteraction,
                 guildConfig,
@@ -1004,19 +1172,31 @@ export async function executePrefixCommand(
             `Command ${commandName} has no executable handler.`,
         );
     } catch (error) {
-        await handleInteractionError(
-            mockInteraction,
+        logger.error(
+            `Prefix command ${prefix}${commandName} failed:`,
             error,
-            {
-                type:
-                    'prefix_command',
-
-                command:
-                    commandName,
-
-                source:
-                    'messageAdapter.executePrefixCommand',
-            },
         );
+
+        try {
+            await handleInteractionError(
+                mockInteraction,
+                error,
+                {
+                    type:
+                        'prefix_command',
+
+                    command:
+                        commandName,
+
+                    source:
+                        'messageAdapter.executePrefixCommand',
+                },
+            );
+        } catch (handlerError) {
+            logger.error(
+                `Failed to handle error from prefix command ${commandName}:`,
+                handlerError,
+            );
+        }
     }
 }
