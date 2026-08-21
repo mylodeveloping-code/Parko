@@ -7,7 +7,6 @@ import {
 
 import {
     createEmbed,
-    successEmbed,
     warningEmbed,
 } from '../../utils/embeds.js';
 
@@ -281,43 +280,23 @@ export default {
                     },
                 );
 
-                const roleErrorPayload = {
-                    embeds: [
-                        warningEmbed(
-                            `⚠️ **Warned** ${target.tag}`,
-                            `**Reason:** ${reason}\n` +
-                            `**Warning #:** ${totalCount}\n\n` +
-                            `⚠️ The warning was recorded, but I could not update the warning roles.\n` +
-                            `Make sure I have **Manage Roles** permission and that my bot role is above all three warning roles.`,
-                        ),
-                    ],
-                };
-
-                if (isPrefixCommand) {
-                    const generalChannel =
-                        guild.channels.cache.find(
-                            (channel) =>
-                                channel.name?.toLowerCase() ===
-                                    'general' &&
-                                channel.isTextBased?.(),
-                        );
-
-                    if (generalChannel) {
-                        await generalChannel.send(
-                            roleErrorPayload,
-                        );
-                    } else {
-                        logger.warn(
-                            `Could not find #general to send warn result.`,
-                            {
-                                guildId,
-                            },
-                        );
-                    }
-                } else {
+                // For prefix commands, do not send a separate
+                // public success/error message. The moderation
+                // notification below is the only public message.
+                if (!isPrefixCommand) {
                     await InteractionHelper.safeEditReply(
                         interaction,
-                        roleErrorPayload,
+                        {
+                            embeds: [
+                                warningEmbed(
+                                    `⚠️ **Warned** ${target.tag}`,
+                                    `**Reason:** ${reason}\n` +
+                                    `**Warning #:** ${totalCount}\n\n` +
+                                    `⚠️ The warning was recorded, but I could not update the warning roles.\n` +
+                                    `Make sure I have **Manage Roles** permission and that my bot role is above all three warning roles.`,
+                                ),
+                            ],
+                        },
                     );
                 }
 
@@ -568,6 +547,11 @@ export default {
         // ====================================================
         // LOG MODERATION ACTION
         // ====================================================
+        //
+        // This is the ONLY public moderation message.
+        // The moderation logger will send the message to the
+        // configured moderation/log channel.
+        //
 
         await logModerationAction({
             client,
@@ -622,91 +606,16 @@ export default {
         });
 
         // ====================================================
-        // SUCCESS RESPONSE
-        // ====================================================
-
-        const successPayload = {
-            embeds: [
-                successEmbed(
-                    totalCount === 3 &&
-                    wasBanned
-                        ? `🔨 **Banned** ${target.tag}`
-                        : `⚠️ **Warned** ${target.tag}`,
-
-                    `**Reason:** ${reason}\n` +
-                    `**Warning #:** ${totalCount}` +
-                    (
-                        totalCount === 3 &&
-                        wasBanned
-                            ? `\n\n🔨 **This was their third warning. They have been banned for 30 days.**`
-                            : ''
-                    ),
-                ),
-            ],
-        };
-
-        // ====================================================
-        // PREFIX COMMAND SUCCESS RESPONSE
+        // NO SUCCESS RESPONSE
         // ====================================================
         //
-        // Prefix commands should NOT respond in the channel
-        // where >warn was executed.
+        // We intentionally do NOT call reply(), editReply(),
+        // or send another message here.
         //
-        // Instead, send the public warning result to #general.
+        // The moderation notification above is the only
+        // public message produced by this command.
         //
 
-        if (isPrefixCommand) {
-            const generalChannel =
-                guild.channels.cache.find(
-                    (channel) =>
-                        channel.name?.toLowerCase() ===
-                            'general' &&
-                        channel.isTextBased?.(),
-                );
-
-            if (!generalChannel) {
-                logger.warn(
-                    `Could not find #general to send warn result.`,
-                    {
-                        guildId,
-                        targetId:
-                            target.id,
-                        warningId:
-                            id,
-                    },
-                );
-
-                return;
-            }
-
-            try {
-                await generalChannel.send(
-                    successPayload,
-                );
-            } catch (error) {
-                logger.error(
-                    `Failed to send warn result to #general.`,
-                    {
-                        guildId,
-                        targetId:
-                            target.id,
-                        warningId:
-                            id,
-                        error,
-                    },
-                );
-            }
-
-            return;
-        }
-
-        // ====================================================
-        // SLASH COMMAND SUCCESS RESPONSE
-        // ====================================================
-
-        await InteractionHelper.safeEditReply(
-            interaction,
-            successPayload,
-        );
+        return;
     },
 };
