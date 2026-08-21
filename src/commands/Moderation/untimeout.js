@@ -159,19 +159,17 @@ export default {
         // RESPONSE
         // ====================================================
 
-        await InteractionHelper.safeEditReply(
-            interaction,
-            {
-                embeds: [
-                    successEmbed(
-                        '🔓 Timeout Removed',
-                        `**User:** <@${targetUser.id}>\n` +
-                        `**Action:** The user's timeout has been removed.\n` +
-                        `**Case ID:** #${result?.caseId ?? 'N/A'}`
-                    ),
-                ],
-            }
-        );
+  await InteractionHelper.safeEditReply(
+    interaction,
+    {
+        embeds: [
+            successEmbed(
+                '🔓 Timeout Removed',
+                `<@${targetUser.id}> has been unmuted. | ${targetUser.id}`
+            ),
+        ],
+    }
+);
 
         logger.info(
             `Removed timeout from ${targetUser.tag}`,
