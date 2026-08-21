@@ -280,28 +280,28 @@ export default {
          * "This application did not respond"
          */
 
-        if (
-            interaction.isChatInputCommand()
-        ) {
-            const commandName =
-                String(
-                    interaction.commandName ||
-                        '',
-                ).toLowerCase();
+if (
+    interaction.isChatInputCommand()
+) {
+    const commandName =
+        String(
+            interaction.commandName ||
+                '',
+        ).toLowerCase();
 
-            logger.info(
-                `📥 InteractionCreate received /${commandName}`,
-            );
+    logger.info(
+        `📥 InteractionCreate received /${commandName}`,
+    );
 
-            const acknowledged =
-                await acknowledgeInteraction(
-                    interaction,
-                );
-
-            if (!acknowledged) {
-                return;
-            }
-        }
+    /*
+     * Do NOT automatically defer or acknowledge
+     * the interaction here.
+     *
+     * Each command handles its own response using
+     * either interaction.reply() or
+     * interaction.deferReply() + interaction.editReply().
+     */
+}
 
         /*
          * --------------------------------------------------------
@@ -776,23 +776,20 @@ export default {
                             `✅ Finished executing /${commandName}.`,
                         );
 
-                        /*
-                         * A command may complete without sending a
-                         * response. Since we already acknowledged the
-                         * interaction, make sure the user still sees
-                         * something instead of an indefinite-looking
-                         * interaction.
-                         */
+/*
+ * If a command finishes without responding,
+ * send a safe fallback response.
+ */
 
-                        if (
-                            interaction.deferred &&
-                            !interaction.replied
-                        ) {
-                            await interaction.editReply({
-                                content:
-                                    '✅ Command completed successfully.',
-                            });
-                        }
+if (
+    !interaction.replied &&
+    !interaction.deferred
+) {
+    await interaction.reply({
+        content:
+            '✅ Command completed successfully.',
+    });
+}
 
                         return;
                     }
@@ -1112,25 +1109,33 @@ export default {
                             replyError,
                         );
 
-                        if (
-                            interaction.isChatInputCommand() &&
-                            interaction.deferred &&
-                            !interaction.replied
-                        ) {
-                            try {
-                                await interaction.editReply({
-                                    content:
-                                        '❌ An error occurred while processing this command.',
-                                });
-                            } catch (
-                                finalError
-                            ) {
-                                logger.error(
-                                    '❌ Final interaction fallback failed:',
-                                    finalError,
-                                );
-                            }
-                        }
+if (
+    interaction.isChatInputCommand() &&
+    !interaction.replied
+) {
+    try {
+        if (interaction.deferred) {
+            await interaction.editReply({
+                content:
+                    '❌ An error occurred while processing this command.',
+            });
+        } else {
+            await interaction.reply({
+                content:
+                    '❌ An error occurred while processing this command.',
+                flags:
+                    MessageFlags.Ephemeral,
+            });
+        }
+    } catch (
+        finalError
+    ) {
+        logger.error(
+            '❌ Final interaction fallback failed:',
+            finalError,
+        );
+    }
+}
                     }
                 }
             },
