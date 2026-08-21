@@ -460,7 +460,7 @@ export default {
                         )
                         .setDescription(
                             'I could not find that user in this server.\n\n' +
-                            '**Usage:** `>mute <user ID/@mention> <duration> [reason]`'
+                            '**Usage:** `>mute [<@ID>/@mention] [duration] [reason]`'
                         ),
                 ],
             });
@@ -491,7 +491,7 @@ export default {
                         .setDescription(
                             'Please provide a valid timeout duration.\n\n' +
                             '**Examples:** `10m`, `1h`, `6h`, `1d`, `1w`\n\n' +
-                            '**Usage:** `>mute <user ID/@mention> <duration> [reason]`'
+                            '**Usage:** `>mute [<@ID>/@mention] [duration] [reason]`'
                         ),
                 ],
             });
