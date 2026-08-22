@@ -1,34 +1,62 @@
 // Player event handlers for Riffy. Adapted from Musicify playerHandler (Apache-2.0).
 
 import { logger } from '../../utils/logger.js';
-import { getGuildMusicData, clearUpdateInterval } from './playerStore.js';
+import {
+    getGuildMusicData,
+    clearUpdateInterval,
+} from './playerStore.js';
+
 import {
     buildNowPlayingEmbed,
     buildPlayerButtonRows,
 } from './musicEmbeds.js';
 
-const UPDATE_INTERVAL_MS = 1000;
+const UPDATE_INTERVAL_MS = 5000;
 const IDLE_DISCONNECT_MS = 30 * 1000;
 
-function getTrackedPosition(player) {
-    const startTime = Number(player?._musicTrackStartTime);
-    const startPosition = Number(player?._musicTrackStartPosition);
-    const pausedAt = Number(player?._musicPausedAt);
+// Prevent multiple refreshes for the same guild from running at once.
+const playerMessageLocks = new Set();
 
-    if (player?.paused && Number.isFinite(pausedAt)) {
+function getTrackedPosition(player) {
+    const startTime = Number(
+        player?._musicTrackStartTime
+    );
+
+    const startPosition = Number(
+        player?._musicTrackStartPosition
+    );
+
+    const pausedAt = Number(
+        player?._musicPausedAt
+    );
+
+    if (
+        player?.paused &&
+        Number.isFinite(pausedAt)
+    ) {
         return Math.max(0, pausedAt);
     }
 
-    if (Number.isFinite(startTime) && Number.isFinite(startPosition)) {
+    if (
+        Number.isFinite(startTime) &&
+        Number.isFinite(startPosition)
+    ) {
         return Math.max(
             0,
-            startPosition + Math.max(0, Date.now() - startTime)
+            startPosition +
+                Math.max(
+                    0,
+                    Date.now() - startTime
+                )
         );
     }
 
-    const lavalinkPosition = Number(player?.position);
+    const lavalinkPosition = Number(
+        player?.position
+    );
 
-    return Number.isFinite(lavalinkPosition) && lavalinkPosition >= 0
+    return Number.isFinite(lavalinkPosition) &&
+        lavalinkPosition >= 0
         ? lavalinkPosition
         : 0;
 }
@@ -39,14 +67,24 @@ function syncPlayerTiming(player) {
     }
 
     const now = Date.now();
-    const isPaused = Boolean(player.paused);
+
+    const isPaused = Boolean(
+        player.paused
+    );
 
     // First-time initialization.
-    if (!Number.isFinite(Number(player._musicTrackStartTime))) {
-        const initialPosition = Number(player.position);
+    if (
+        !Number.isFinite(
+            Number(player._musicTrackStartTime)
+        )
+    ) {
+        const initialPosition = Number(
+            player.position
+        );
 
         player._musicTrackStartPosition =
-            Number.isFinite(initialPosition) && initialPosition >= 0
+            Number.isFinite(initialPosition) &&
+            initialPosition >= 0
                 ? initialPosition
                 : 0;
 
@@ -54,22 +92,46 @@ function syncPlayerTiming(player) {
         player._musicPausedAt = null;
     }
 
-    // Detect a newly paused player.
-    if (isPaused && !Number.isFinite(Number(player._musicPausedAt))) {
-        player._musicPausedAt = getTrackedPosition(player);
+    // Detect when the player was paused.
+    if (
+        isPaused &&
+        !Number.isFinite(
+            Number(player._musicPausedAt)
+        )
+    ) {
+        player._musicPausedAt =
+            getTrackedPosition(player);
+
         return;
     }
 
-    // Detect a player that has resumed.
-    if (!isPaused && Number.isFinite(Number(player._musicPausedAt))) {
-        const pausedPosition = Number(player._musicPausedAt);
+    // Detect when the player resumed.
+    if (
+        !isPaused &&
+        Number.isFinite(
+            Number(player._musicPausedAt)
+        )
+    ) {
+        const pausedPosition = Number(
+            player._musicPausedAt
+        );
 
-        player._musicTrackStartPosition = pausedPosition;
+        player._musicTrackStartPosition =
+            pausedPosition;
+
         player._musicTrackStartTime = now;
+
         player._musicPausedAt = null;
     }
 }
 
+/**
+ * Edit the existing player message whenever possible.
+ *
+ * A new message is ONLY created when there is genuinely no
+ * existing player message. Temporary API/fetch errors will not
+ * cause the bot to forget the message and spam new ones.
+ */
 async function editOrSendPlayerMessage(
     client,
     guildData,
@@ -77,11 +139,7 @@ async function editOrSendPlayerMessage(
     embed,
     components
 ) {
-    const channel = client.channels.cache.get(channelId);
-
-    if (!channel) {
-        guildData.playerMessageId = null;
-        guildData.playerChannelId = null;
+    if (!channelId) {
         return;
     }
 
@@ -90,26 +148,89 @@ async function editOrSendPlayerMessage(
         components,
     };
 
+    let channel;
+
+    try {
+        channel =
+            client.channels.cache.get(channelId) ||
+            await client.channels.fetch(channelId);
+    } catch (error) {
+        logger.warn(
+            'Failed to fetch music player channel:',
+            error?.message || error
+        );
+
+        return;
+    }
+
+    if (
+        !channel ||
+        !channel.isTextBased?.()
+    ) {
+        logger.warn(
+            'Music player channel is not text-based.'
+        );
+
+        return;
+    }
+
+    /*
+     * If a player message already exists, edit it.
+     *
+     * Do NOT clear the stored ID for random failures.
+     * Only clear it when Discord confirms the message
+     * or channel no longer exists.
+     */
     if (guildData.playerMessageId) {
         try {
-            const msg = await channel.messages.fetch(
-                guildData.playerMessageId
-            );
+            const msg =
+                await channel.messages.fetch(
+                    guildData.playerMessageId
+                );
 
             await msg.edit(payload);
+
             return;
-        } catch {
-            guildData.playerMessageId = null;
-            guildData.playerChannelId = null;
-            clearUpdateInterval(guildData);
+        } catch (error) {
+            const errorCode = error?.code;
+
+            /*
+             * Discord error 10008 = Unknown Message
+             * Discord error 10003 = Unknown Channel
+             *
+             * Only in these cases do we forget the old
+             * player message and allow a replacement.
+             */
+            if (
+                errorCode === 10008 ||
+                errorCode === 10003
+            ) {
+                guildData.playerMessageId = null;
+                guildData.playerChannelId = null;
+            } else {
+                logger.warn(
+                    'Failed to update music player message:',
+                    error?.message || error
+                );
+
+                return;
+            }
         }
     }
 
+    /*
+     * There is genuinely no known player message now,
+     * so create one.
+     */
     try {
-        const newMsg = await channel.send(payload);
+        const newMsg =
+            await channel.send(payload);
 
-        guildData.playerMessageId = newMsg.id;
-        guildData.playerChannelId = channel.id;
+        guildData.playerMessageId =
+            newMsg.id;
+
+        guildData.playerChannelId =
+            channel.id;
     } catch (error) {
         logger.error(
             'Failed to send music player message:',
@@ -118,33 +239,58 @@ async function editOrSendPlayerMessage(
     }
 }
 
-export async function refreshPlayerMessage(client, guildId) {
+export async function refreshPlayerMessage(
+    client,
+    guildId
+) {
+    /*
+     * Prevent overlapping refreshes.
+     *
+     * Without this lock, several setInterval calls can
+     * overlap and all decide that there is no message,
+     * causing multiple "Now Playing" messages to be sent.
+     */
+    if (playerMessageLocks.has(guildId)) {
+        return;
+    }
+
+    playerMessageLocks.add(guildId);
+
     try {
-        const player = client.riffy?.players?.get(guildId);
+        const player =
+            client.riffy?.players?.get(
+                guildId
+            );
 
         if (!player?.current) {
             return;
         }
 
-        // Keep our local clock synchronized with pause/resume state.
         syncPlayerTiming(player);
 
-        const guildData = getGuildMusicData(guildId);
+        const guildData =
+            getGuildMusicData(guildId);
 
-        const embed = buildNowPlayingEmbed(
-            player.current,
-            player,
-            guildData
-        );
+        const embed =
+            buildNowPlayingEmbed(
+                player.current,
+                player,
+                guildData
+            );
 
-        const components = buildPlayerButtonRows(
-            player,
-            guildData
-        );
+        const components =
+            buildPlayerButtonRows(
+                player,
+                guildData
+            );
 
         const channelId =
             guildData.playerChannelId ||
             player.textChannel;
+
+        if (!channelId) {
+            return;
+        }
 
         await editOrSendPlayerMessage(
             client,
@@ -158,17 +304,32 @@ export async function refreshPlayerMessage(client, guildId) {
             'Failed to refresh music player message:',
             error
         );
+    } finally {
+        playerMessageLocks.delete(guildId);
     }
 }
 
-function startUpdateInterval(client, guildId) {
-    const guildData = getGuildMusicData(guildId);
+function startUpdateInterval(
+    client,
+    guildId
+) {
+    const guildData =
+        getGuildMusicData(guildId);
 
     clearUpdateInterval(guildData);
 
-    guildData.updateInterval = setInterval(() => {
-        refreshPlayerMessage(client, guildId);
-    }, UPDATE_INTERVAL_MS);
+    guildData.updateInterval =
+        setInterval(() => {
+            refreshPlayerMessage(
+                client,
+                guildId
+            ).catch((error) => {
+                logger.error(
+                    'Music player interval refresh failed:',
+                    error
+                );
+            });
+        }, UPDATE_INTERVAL_MS);
 }
 
 export function setupPlayerHandler(client) {
@@ -180,91 +341,121 @@ export function setupPlayerHandler(client) {
         return;
     }
 
-    // Lavalink nodes often flap (reconnect -> error -> reconnect).
-    // Throttle all per-node messages to one line per interval.
+    // Lavalink nodes often reconnect repeatedly.
+    // Throttle node logs to avoid console spam.
     const nodeLogState = new Map();
-    const NODE_LOG_INTERVAL_MS = 5 * 60 * 1000;
 
-    const shouldLogNodeEvent = (nodeName) => {
-        const prev =
-            nodeLogState.get(nodeName) ?? {
-                lastLogAt: 0,
-                hasConnected: false,
-            };
+    const NODE_LOG_INTERVAL_MS =
+        5 * 60 * 1000;
 
-        const now = Date.now();
+    const shouldLogNodeEvent =
+        (nodeName) => {
+            const prev =
+                nodeLogState.get(nodeName) ?? {
+                    lastLogAt: 0,
+                    hasConnected: false,
+                };
 
-        if (
-            now - prev.lastLogAt <
-            NODE_LOG_INTERVAL_MS
-        ) {
-            return false;
+            const now = Date.now();
+
+            if (
+                now - prev.lastLogAt <
+                NODE_LOG_INTERVAL_MS
+            ) {
+                return false;
+            }
+
+            nodeLogState.set(
+                nodeName,
+                {
+                    ...prev,
+                    lastLogAt: now,
+                }
+            );
+
+            return true;
+        };
+
+    const markNodeConnected =
+        (nodeName) => {
+            const prev =
+                nodeLogState.get(nodeName) ?? {
+                    lastLogAt: 0,
+                    hasConnected: false,
+                };
+
+            nodeLogState.set(
+                nodeName,
+                {
+                    ...prev,
+                    hasConnected: true,
+                }
+            );
+        };
+
+    client.riffy.on(
+        'nodeConnect',
+        (node) => {
+            const prev =
+                nodeLogState.get(node.name) ?? {
+                    lastLogAt: 0,
+                    hasConnected: false,
+                };
+
+            if (prev.hasConnected) {
+                return;
+            }
+
+            markNodeConnected(node.name);
+
+            logger.info(
+                `Lavalink node "${node.name}" connected.`
+            );
         }
+    );
 
-        nodeLogState.set(nodeName, {
-            ...prev,
-            lastLogAt: now,
-        });
-
-        return true;
-    };
-
-    const markNodeConnected = (nodeName) => {
-        const prev =
-            nodeLogState.get(nodeName) ?? {
-                lastLogAt: 0,
-                hasConnected: false,
-            };
-
-        nodeLogState.set(nodeName, {
-            ...prev,
-            hasConnected: true,
-        });
-    };
-
-    client.riffy.on('nodeConnect', (node) => {
-        const prev =
-            nodeLogState.get(node.name) ?? {
-                lastLogAt: 0,
-                hasConnected: false,
-            };
-
-        if (prev.hasConnected) {
-            return;
+    client.riffy.on(
+        'nodeReconnect',
+        () => {
+            // Intentionally silent.
         }
+    );
 
-        markNodeConnected(node.name);
+    client.riffy.on(
+        'nodeError',
+        (node, error) => {
+            if (
+                !shouldLogNodeEvent(
+                    node.name
+                )
+            ) {
+                return;
+            }
 
-        logger.info(
-            `Lavalink node "${node.name}" connected.`
-        );
-    });
-
-    client.riffy.on('nodeReconnect', () => {
-        // Intentionally silent.
-    });
-
-    client.riffy.on('nodeError', (node, error) => {
-        if (!shouldLogNodeEvent(node.name)) {
-            return;
+            logger.warn(
+                `Lavalink node "${node.name}" error: ${
+                    error?.message || error
+                }`
+            );
         }
+    );
 
-        logger.warn(
-            `Lavalink node "${node.name}" error: ${
-                error?.message || error
-            }`
-        );
-    });
+    client.riffy.on(
+        'nodeDisconnect',
+        (node) => {
+            if (
+                !shouldLogNodeEvent(
+                    node.name
+                )
+            ) {
+                return;
+            }
 
-    client.riffy.on('nodeDisconnect', (node) => {
-        if (!shouldLogNodeEvent(node.name)) {
-            return;
+            logger.warn(
+                `Lavalink node "${node.name}" disconnected.`
+            );
         }
-
-        logger.warn(
-            `Lavalink node "${node.name}" disconnected.`
-        );
-    });
+    );
 
     client.riffy.on(
         'trackStart',
@@ -275,13 +466,15 @@ export function setupPlayerHandler(client) {
                         player.guildId
                     );
 
-                // Reset the local timing clock for the new track.
+                // Reset timing for the new track.
                 player._musicTrackStartPosition = 0;
-                player._musicTrackStartTime = Date.now();
+
+                player._musicTrackStartTime =
+                    Date.now();
+
                 player._musicPausedAt = null;
 
-                // Keep Lavalink's loop mode aligned with
-                // the stored preference.
+                // Keep Lavalink loop mode synchronized.
                 if (
                     guildData.loop &&
                     player.loop !== guildData.loop
@@ -312,29 +505,16 @@ export function setupPlayerHandler(client) {
                     guildData.idleTimeout = null;
                 }
 
-                const embed =
-                    buildNowPlayingEmbed(
-                        track,
-                        player,
-                        guildData
-                    );
-
-                const components =
-                    buildPlayerButtonRows(
-                        player,
-                        guildData
-                    );
-
-                const channelId =
-                    guildData.playerChannelId ||
-                    player.textChannel;
-
-                await editOrSendPlayerMessage(
+                /*
+                 * Use refreshPlayerMessage instead of
+                 * duplicating the send/edit logic here.
+                 *
+                 * This also means the same guild lock is
+                 * used for trackStart and interval updates.
+                 */
+                await refreshPlayerMessage(
                     client,
-                    guildData,
-                    channelId,
-                    embed,
-                    components
+                    player.guildId
                 );
 
                 startUpdateInterval(
@@ -376,9 +556,12 @@ export function setupPlayerHandler(client) {
                         const channel =
                             client.channels.cache.get(
                                 guildData.playerChannelId
+                            ) ||
+                            await client.channels.fetch(
+                                guildData.playerChannelId
                             );
 
-                        if (channel) {
+                        if (channel?.isTextBased?.()) {
                             const msg =
                                 await channel.messages.fetch(
                                     guildData.playerMessageId
@@ -387,15 +570,12 @@ export function setupPlayerHandler(client) {
                             await msg.delete();
                         }
                     } catch {
-                        // Already deleted.
+                        // Message may already be deleted.
                     }
-
-                    guildData.playerMessageId =
-                        null;
-
-                    guildData.playerChannelId =
-                        null;
                 }
+
+                guildData.playerMessageId = null;
+                guildData.playerChannelId = null;
 
                 if (!guildData.twentyFourSeven) {
                     if (guildData.idleTimeout) {
@@ -449,6 +629,10 @@ export function setupPlayerHandler(client) {
                 guildData
             );
 
+            playerMessageLocks.delete(
+                player.guildId
+            );
+
             if (
                 guildData.playerMessageId &&
                 guildData.playerChannelId
@@ -457,9 +641,12 @@ export function setupPlayerHandler(client) {
                     const channel =
                         client.channels.cache.get(
                             guildData.playerChannelId
+                        ) ||
+                        await client.channels.fetch(
+                            guildData.playerChannelId
                         );
 
-                    if (channel) {
+                    if (channel?.isTextBased?.()) {
                         const msg =
                             await channel.messages.fetch(
                                 guildData.playerMessageId
@@ -468,13 +655,15 @@ export function setupPlayerHandler(client) {
                         await msg.delete();
                     }
                 } catch {
-                    // Already deleted.
+                    // Message may already be deleted.
                 }
             }
 
             guildData.playerMessageId = null;
             guildData.playerChannelId = null;
+
             guildData.previousTracks = [];
+
             guildData.autoPaused = false;
 
             if (guildData.idleTimeout) {
@@ -508,13 +697,15 @@ export function setupPlayerHandler(client) {
                     player.guildId
                 );
 
-            if (guildData.playerChannelId) {
+            if (
+                guildData.playerChannelId
+            ) {
                 const channel =
                     client.channels.cache.get(
                         guildData.playerChannelId
                     );
 
-                if (channel) {
+                if (channel?.isTextBased?.()) {
                     channel
                         .send(
                             `Failed to play **${
@@ -565,4 +756,6 @@ export async function shutdownMusic(client) {
             );
         }
     }
+
+    playerMessageLocks.clear();
 }
